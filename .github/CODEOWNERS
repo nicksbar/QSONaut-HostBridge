@@ -1,0 +1,7 @@
+# Default ownership
+* @nicksbar
+
+# Core CI and release governance
+/.github/ @nicksbar
+/LICENSE @nicksbar
+/Cargo.toml @nicksbar
