@@ -103,7 +103,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/$env:PACKAGE_NAME.exe" "$artifact/"
           Copy-Item README.md, LICENSE "$artifact/"
           Compress-Archive -Path $artifact -DestinationPath "$artifact.zip"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: hostbridge-${{ matrix.target }}
           path: |
