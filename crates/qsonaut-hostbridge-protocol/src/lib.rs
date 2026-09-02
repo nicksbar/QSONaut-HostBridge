@@ -38,6 +38,8 @@ pub struct Capabilities {
     /// Physical or logical capture inputs available on the host. The client
     /// selects one by stable ID rather than guessing a device path.
     pub audio_sources: Vec<AudioSourceInfo>,
+    /// Host playback outputs available for client-to-host media.
+    pub audio_outputs: Vec<AudioOutputInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,6 +75,13 @@ pub struct AudioSourceInfo {
     pub id: String,
     pub label: String,
     pub kind: AudioSourceKind,
+    pub formats: Vec<AudioFormat>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AudioOutputInfo {
+    pub id: String,
+    pub label: String,
     pub formats: Vec<AudioFormat>,
 }
 
@@ -124,6 +133,11 @@ pub enum ClientMessage {
     SelectAudio {
         enabled: bool,
         source_id: String,
+        format: AudioFormat,
+    },
+    SelectAudioOutput {
+        enabled: bool,
+        output_id: String,
         format: AudioFormat,
     },
     Ping {

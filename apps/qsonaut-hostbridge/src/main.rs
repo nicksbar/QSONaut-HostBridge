@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use qsonaut_hostbridge::{
-    AudioFrame, AudioSource, ConfiguredRadioProvider, HostBridge, HostConfig, RadioProvider,
-    RadioProviderEntry, StaticAuthorizer,
+    AudioFrame, AudioOutputProvider, AudioSink, AudioSource, ConfiguredRadioProvider, HostBridge,
+    HostConfig, RadioProvider, RadioProviderEntry, StaticAuthorizer,
 };
 use qsonaut_hostbridge_protocol::{
-    AudioCodec, AudioFormat, AudioSourceInfo, AudioSourceKind, Capabilities, MediaDirection,
-    MediaFrameHeader, RadioDeviceInfo, RadioDriver, RadioTransportKind, MEDIA_HEADER_VERSION,
+    AudioCodec, AudioFormat, AudioOutputInfo, AudioSourceInfo, AudioSourceKind, Capabilities,
+    MediaDirection, MediaFrameHeader, RadioDeviceInfo, RadioDriver, RadioTransportKind,
+    MEDIA_HEADER_VERSION,
 };
 use rigwright::{drivers::open_model, Radio};
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,7 @@ use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -427,6 +428,92 @@ impl AudioSource for AlsaAudioSource {
     }
 }
 
+struct AlsaAudioOutput {
+    outputs: Vec<AudioOutputInfo>,
+}
+
+impl AlsaAudioOutput {
+    fn new() -> Self {
+        let output = Command::new("aplay").arg("-L").output();
+        let outputs = output
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+            .into_iter()
+            .flat_map(|devices| {
+                devices
+                    .lines()
+                    .filter(|line| line.starts_with("hw:CARD="))
+                    .filter_map(|line| {
+                        let id = line.trim().to_owned();
+                        let channels = alsa_channels(&id)?;
+                        Some(AudioOutputInfo {
+                            id: id.clone(),
+                            label: format!("ALSA {id}"),
+                            formats: vec![AudioFormat {
+                                codec: AudioCodec::PcmS16Le,
+                                channels,
+                                sample_rate_hz: 48_000,
+                            }],
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        Self { outputs }
+    }
+}
+
+struct AlsaAudioSink {
+    sender: mpsc::SyncSender<AudioFrame>,
+}
+
+impl AudioSink for AlsaAudioSink {
+    fn try_submit(&self, frame: AudioFrame) -> Result<()> {
+        self.sender
+            .try_send(frame)
+            .map_err(|error| anyhow::anyhow!("audio playback queue is full or closed: {error}"))
+    }
+}
+
+impl AudioOutputProvider for AlsaAudioOutput {
+    fn outputs(&self) -> Vec<AudioOutputInfo> {
+        self.outputs.clone()
+    }
+
+    fn open(&self, output_id: &str, format: &AudioFormat) -> Result<Arc<dyn AudioSink>> {
+        let output = self
+            .outputs
+            .iter()
+            .find(|output| output.id == output_id)
+            .ok_or_else(|| anyhow::anyhow!("ALSA audio output is unavailable"))?;
+        if !output.formats.contains(format) {
+            anyhow::bail!("requested format is unavailable for ALSA audio output")
+        }
+        let (sender, receiver) = mpsc::sync_channel::<AudioFrame>(8);
+        let channels = format.channels.to_string();
+        let mut child = Command::new("aplay")
+            .args([
+                "-D", output_id, "-t", "raw", "-f", "S16_LE", "-r", "48000", "-c", &channels,
+            ])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("start aplay for {output_id}"))?;
+        let mut input = child.stdin.take().context("open aplay stdin")?;
+        std::thread::spawn(move || {
+            while let Ok(frame) = receiver.recv() {
+                if input.write_all(&frame.pcm_s16le).is_err() {
+                    break;
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        });
+        Ok(Arc::new(AlsaAudioSink { sender }))
+    }
+}
+
 fn stable_stream_id(value: &str) -> u32 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -487,13 +574,14 @@ async fn run(config_path: &Path) -> Result<()> {
         anyhow::bail!("access key and password must be configured")
     }
     tracing_subscriber::fmt::init();
-    HostBridge::new(
+    HostBridge::new_with_audio_output(
         HostConfig {
             bind: config.bind,
             host_name: config.host_name,
         },
         Arc::new(configured_radios()?),
         Some(Arc::new(AlsaAudioSource::new())),
+        Some(Arc::new(AlsaAudioOutput::new())),
         Arc::new(StaticAuthorizer::new(config.access_key, config.password)),
     )
     .run()
@@ -503,17 +591,19 @@ async fn run(config_path: &Path) -> Result<()> {
 fn show_devices() -> Result<()> {
     let radios = configured_radios()?;
     let audio = AlsaAudioSource::new();
+    let outputs = AlsaAudioOutput::new();
     let capabilities = Capabilities {
         radio_control: !radios.devices().is_empty(),
         radio_devices: radios.devices(),
         audio_capture: !audio.sources().is_empty(),
-        audio_playback: false,
-        media_codecs: if audio.sources().is_empty() {
+        audio_playback: !outputs.outputs().is_empty(),
+        media_codecs: if audio.sources().is_empty() && outputs.outputs().is_empty() {
             Vec::new()
         } else {
             vec![AudioCodec::PcmS16Le]
         },
         audio_sources: audio.sources(),
+        audio_outputs: outputs.outputs(),
     };
     println!("{}", serde_json::to_string_pretty(&capabilities)?);
     Ok(())

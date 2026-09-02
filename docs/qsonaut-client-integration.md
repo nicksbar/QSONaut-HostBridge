@@ -194,10 +194,28 @@ the payload is interleaved signed little-endian samples. The current Pi emits
 The client must track sequence gaps, report/drop lost frames, and use a bounded
 jitter buffer. It must not replay media from an old session or stream ID.
 
-Host-to-client receive audio is currently the implemented media path. The
-client-to-host frame validator and `AudioSink` boundary exist, but the current
-Pi executable advertises `audio_playback: false`; QSONaut must not send
-client-to-host media until a host advertises that capability.
+Both directions are implemented when the host advertises the corresponding
+catalog. Host-to-client capture is selected with `select_audio`; client-to-host
+playback is selected with `select_audio_output`:
+
+```json
+{
+  "type": "select_audio_output",
+  "enabled": true,
+  "output_id": "host-advertised-output-id",
+  "format": {
+    "codec": "pcm_s16_le",
+    "channels": 2,
+    "sample_rate_hz": 48000
+  }
+}
+```
+
+Only send client-to-host binary frames after `audio_playback` is true and an
+output has been acknowledged. The Pi adapter writes PCM to the selected ALSA
+output through a bounded queue and returns a structured media error if the
+queue is full or the output closes. Media transport is not PTT: QSONaut must
+keep transmit arming, sequencing, and explicit `set_ptt` safety separate.
 
 ## Reference Pi catalog
 
@@ -218,7 +236,9 @@ examples from one host, not a compile-time device list.
 - [ ] Render dynamic radio/audio catalogs from `HostHello.capabilities`.
 - [ ] Select radio by advertised ID and handle lease errors.
 - [ ] Select exact audio source and format by advertised ID.
+- [ ] Select an audio output and format by advertised ID when playback is enabled.
 - [ ] Decode 32-byte media headers and feed PCM into the QSONaut audio path.
+- [ ] Encode client-to-host PCM frames with direction `client_to_host` when an output is selected.
 - [ ] Track sequence/timestamp gaps and bound buffering.
 - [ ] Handle host `ping` with `pong`.
 - [ ] Force local PTT off on disconnect and reconnect.

@@ -75,6 +75,13 @@ pub trait AudioSink: Send + Sync {
     fn try_submit(&self, frame: AudioFrame) -> Result<()>;
 }
 
+/// Host-owned playback catalog. Implementations open only the output selected
+/// by the authenticated client and keep device handles host-local.
+pub trait AudioOutputProvider: Send + Sync {
+    fn outputs(&self) -> Vec<AudioOutputInfo>;
+    fn open(&self, output_id: &str, format: &AudioFormat) -> Result<Arc<dyn AudioSink>>;
+}
+
 /// Host-owned radio catalog. Implementations enumerate USB/serial devices and
 /// open the selected Rigwright driver without exposing device paths to clients.
 pub trait RadioProvider: Send + Sync {
@@ -223,6 +230,7 @@ pub struct HostBridge {
     radios: Arc<dyn RadioProvider>,
     audio: Option<Arc<dyn AudioSource>>,
     audio_sink: Option<Arc<dyn AudioSink>>,
+    audio_outputs: Option<Arc<dyn AudioOutputProvider>>,
     authorizer: Arc<dyn Authorizer>,
 }
 
@@ -248,6 +256,24 @@ impl HostBridge {
             radios,
             audio,
             audio_sink,
+            audio_outputs: None,
+            authorizer,
+        }
+    }
+
+    pub fn new_with_audio_output(
+        config: HostConfig,
+        radios: Arc<dyn RadioProvider>,
+        audio: Option<Arc<dyn AudioSource>>,
+        audio_outputs: Option<Arc<dyn AudioOutputProvider>>,
+        authorizer: Arc<dyn Authorizer>,
+    ) -> Self {
+        Self {
+            config,
+            radios,
+            audio,
+            audio_sink: None,
+            audio_outputs,
             authorizer,
         }
     }
@@ -284,15 +310,23 @@ impl HostBridge {
             anyhow::bail!("unauthorized HostBridge client")
         }
         let session_id = Uuid::new_v4();
+        let audio_outputs = self
+            .audio_outputs
+            .as_ref()
+            .map(|outputs| outputs.outputs())
+            .unwrap_or_default();
         let capabilities = Capabilities {
             radio_control: !self.radios.devices().is_empty(),
             radio_devices: self.radios.devices(),
             audio_capture: self.audio.is_some(),
-            audio_playback: self.audio_sink.is_some(),
-            media_codecs: (self.audio.is_some() || self.audio_sink.is_some())
-                .then_some(vec![AudioCodec::PcmS16Le])
-                .unwrap_or_default(),
+            audio_playback: self.audio_sink.is_some() || !audio_outputs.is_empty(),
+            media_codecs: (self.audio.is_some()
+                || self.audio_sink.is_some()
+                || !audio_outputs.is_empty())
+            .then_some(vec![AudioCodec::PcmS16Le])
+            .unwrap_or_default(),
             audio_sources: self.audio.as_ref().map(|a| a.sources()).unwrap_or_default(),
+            audio_outputs,
         };
         send_json(
             &mut sink,
@@ -308,6 +342,7 @@ impl HostBridge {
         // Audio is opt-in per session. Capability advertisement tells the
         // client what can be selected without starting a stream implicitly.
         let mut audio_rx: Option<broadcast::Receiver<AudioFrame>> = None;
+        let mut selected_audio_sink = self.audio_sink.clone();
         let mut selected_radio: Option<RadioSelection> = None;
         let mut heartbeat = time::interval(Duration::from_secs(15));
         let mut last_activity = Instant::now();
@@ -317,13 +352,13 @@ impl HostBridge {
                 message = source.next() => match message {
                     Some(Ok(Message::Text(text))) => {
                         last_activity = Instant::now();
-                        if let Err(error) = self.dispatch(&mut sink, &mut selected_radio, &mut audio_rx, &text).await {
+                        if let Err(error) = self.dispatch(&mut sink, &mut selected_radio, &mut audio_rx, &mut selected_audio_sink, &text).await {
                             send_json(&mut sink, &ServerMessage::Error { code: "request_failed".into(), message: error.to_string() }).await?;
                         }
                     }
                     Some(Ok(Message::Binary(bytes))) => {
                         last_activity = Instant::now();
-                        if let Err(error) = self.dispatch_binary(&bytes).await {
+                        if let Err(error) = self.dispatch_binary(&selected_audio_sink, &bytes).await {
                             send_json(&mut sink, &ServerMessage::Error { code: "media_failed".into(), message: error.to_string() }).await?;
                         }
                     }
@@ -373,7 +408,11 @@ impl HostBridge {
         Ok(())
     }
 
-    async fn dispatch_binary(&self, bytes: &[u8]) -> Result<()> {
+    async fn dispatch_binary(
+        &self,
+        selected_audio_sink: &Option<Arc<dyn AudioSink>>,
+        bytes: &[u8],
+    ) -> Result<()> {
         if bytes.len() < MediaFrameHeader::BYTES {
             anyhow::bail!("media frame is shorter than its header")
         }
@@ -391,10 +430,9 @@ impl HostBridge {
         if bytes.len() > MAX_MEDIA_FRAME_BYTES {
             anyhow::bail!("media frame exceeds the HostBridge limit")
         }
-        let sink = self
-            .audio_sink
+        let sink = selected_audio_sink
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("audio playback is unavailable"))?;
+            .ok_or_else(|| anyhow::anyhow!("select an audio output first"))?;
         sink.try_submit(AudioFrame {
             header,
             pcm_s16le: Arc::from(bytes[MediaFrameHeader::BYTES..].to_vec()),
@@ -406,6 +444,7 @@ impl HostBridge {
         sink: &mut S,
         selected_radio: &mut Option<RadioSelection>,
         audio_rx: &mut Option<broadcast::Receiver<AudioFrame>>,
+        selected_audio_sink: &mut Option<Arc<dyn AudioSink>>,
         text: &str,
     ) -> Result<()>
     where
@@ -488,6 +527,30 @@ impl HostBridge {
                         anyhow::bail!("requested format is unavailable for audio source")
                     }
                     *audio_rx = Some(audio.subscribe(&source_id, &format)?);
+                }
+                send_json(sink, &ServerMessage::Ack { request_id: None }).await?;
+            }
+            ClientMessage::SelectAudioOutput {
+                enabled,
+                output_id,
+                format,
+            } => {
+                if !enabled {
+                    *selected_audio_sink = None;
+                } else {
+                    let outputs = self
+                        .audio_outputs
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("audio playback is unavailable"))?;
+                    let output = outputs
+                        .outputs()
+                        .into_iter()
+                        .find(|output| output.id == output_id)
+                        .ok_or_else(|| anyhow::anyhow!("audio output is unavailable"))?;
+                    if !output.formats.contains(&format) {
+                        anyhow::bail!("requested format is unavailable for audio output")
+                    }
+                    *selected_audio_sink = Some(outputs.open(&output_id, &format)?);
                 }
                 send_json(sink, &ServerMessage::Ack { request_id: None }).await?;
             }

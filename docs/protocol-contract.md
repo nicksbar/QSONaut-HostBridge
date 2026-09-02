@@ -90,10 +90,10 @@ available on both sides.
 
 ## Current implementation gap
 
-The current runtime now has versioned stream metadata, explicit media
-direction, client-to-host media validation through `AudioSink`, structured
-request/media errors, bounded frame sizes, lag reporting, heartbeat pings, and
-PTT cleanup on session loss. It still needs the real HostBridge hardware
-provider, host audio capture, an adapter implementing `AudioSink`, and a
-production service/client integration. The executable remains deliberately
-wired to `NullRadio` and no audio provider.
+The current runtime has versioned stream metadata, explicit media direction,
+client-to-host media validation through `AudioSink`, selectable host playback
+outputs through `AudioOutputProvider`, structured request/media errors, bounded
+frame sizes, lag reporting, heartbeat pings, and PTT cleanup on session loss.
+The Linux executable supplies dynamic Rigwright and ALSA adapters. Actual RF
+transmission remains a separate hardware/operator validation: media delivery
+does not key PTT or claim that a modem/radio chain is configured.

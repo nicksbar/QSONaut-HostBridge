@@ -14,6 +14,8 @@ client does not need direct access to the host's serial or audio device paths.
   is session safety, not a permanent hardware lock.
 - Binary PCM media frames with stream IDs, direction, timing, codec, and length.
 - Dynamic host-side serial and ALSA discovery with stable client-visible IDs.
+- Bidirectional 48 kHz S16LE media: selected ALSA inputs stream to QSONaut and
+  selected ALSA outputs accept bounded client media queues.
 - Heartbeats, bounded media frames, structured errors, and forced PTT-off on
   session loss.
 - User-level Linux systemd service installation.
@@ -55,8 +57,9 @@ cargo build --locked --release --bin qsonaut-hostbridge
 ./target/release/qsonaut-hostbridge devices
 ```
 
-The `devices` command shows radios and ALSA inputs currently visible to the
-station user. It is safe to run repeatedly and does not acquire a radio lease.
+The `devices` command shows radios, ALSA inputs, and ALSA outputs currently
+visible to the station user. It is safe to run repeatedly and does not acquire
+a radio lease.
 
 Configure credentials and the listener. Use `127.0.0.1:8765` for local-only
 clients; use `0.0.0.0:8765` for a trusted-LAN QSONaut client:
@@ -118,6 +121,11 @@ Unknown serial devices are advertised as selectable generic Icom, modern
 Yaesu, classic Yaesu, and Kenwood driver candidates. A failed candidate open
 is reported to the client; the host does not permanently hide or lock the
 device. Hot-plug changes are discovered after restarting HostBridge.
+
+The same dynamic catalog includes ALSA playback outputs. After the client
+sends `select_audio_output`, HostBridge starts `aplay` for that host-owned
+output and forwards client-to-host PCM through a bounded queue. Queue overflow
+is reported as a media error; it never blocks radio control.
 
 The client sees only stable IDs and labels. Raw serial paths remain host-local
 and are opened lazily after an exclusive radio lease is acquired.
