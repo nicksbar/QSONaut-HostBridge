@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use qsonaut_hostbridge::{
-    AudioFrame, AudioSource, ConfiguredRadioProvider, HostBridge, HostConfig, RadioProviderEntry,
-    StaticAuthorizer,
+    AudioFrame, AudioSource, ConfiguredRadioProvider, HostBridge, HostConfig, RadioProvider,
+    RadioProviderEntry, StaticAuthorizer,
 };
 use qsonaut_hostbridge_protocol::{
-    AudioCodec, AudioFormat, AudioSourceInfo, AudioSourceKind, MediaDirection, MediaFrameHeader,
-    RadioDeviceInfo, RadioDriver, RadioTransportKind, MEDIA_HEADER_VERSION,
+    AudioCodec, AudioFormat, AudioSourceInfo, AudioSourceKind, Capabilities, MediaDirection,
+    MediaFrameHeader, RadioDeviceInfo, RadioDriver, RadioTransportKind, MEDIA_HEADER_VERSION,
 };
 use rigwright::{drivers::open_model, Radio};
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,8 @@ enum CommandKind {
     Service(ServiceCommand),
     /// Run the host in the foreground.
     Run,
+    /// Print the currently discovered host radios and audio sources.
+    Devices,
 }
 
 #[derive(Debug, Args)]
@@ -498,12 +500,32 @@ async fn run(config_path: &Path) -> Result<()> {
     .await
 }
 
+fn show_devices() -> Result<()> {
+    let radios = configured_radios()?;
+    let audio = AlsaAudioSource::new();
+    let capabilities = Capabilities {
+        radio_control: !radios.devices().is_empty(),
+        radio_devices: radios.devices(),
+        audio_capture: !audio.sources().is_empty(),
+        audio_playback: false,
+        media_codecs: if audio.sources().is_empty() {
+            Vec::new()
+        } else {
+            vec![AudioCodec::PcmS16Le]
+        },
+        audio_sources: audio.sources(),
+    };
+    println!("{}", serde_json::to_string_pretty(&capabilities)?);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let path = config_path(&cli);
     match cli.command.unwrap_or(CommandKind::Run) {
         CommandKind::Run => run(&path).await,
+        CommandKind::Devices => show_devices(),
         CommandKind::Config(command) => match command.action {
             ConfigAction::Set {
                 key,
