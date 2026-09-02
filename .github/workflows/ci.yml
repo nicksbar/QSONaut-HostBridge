@@ -37,7 +37,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - name: Validate workspace metadata
-        run: cargo metadata --locked --no-deps --format-version 1 >/dev/null
+        run: cargo metadata --locked --no-deps --format-version 1
       - run: cargo fmt --all -- --check
       - run: cargo check --locked --workspace --all-targets --target ${{ matrix.target }}
       - run: cargo clippy --locked --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
