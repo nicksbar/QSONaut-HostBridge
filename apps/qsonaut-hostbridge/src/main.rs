@@ -190,92 +190,77 @@ fn configured_radios() -> Result<ConfiguredRadioProvider> {
     for device in devices.flatten() {
         let file_name = device.file_name().to_string_lossy().into_owned();
         let path = device.path().to_string_lossy().into_owned();
-        let lower = file_name.to_ascii_lowercase();
-        if lower.contains("ic-7300") {
-            add_radio_entry(
-                &mut entries,
-                file_name,
-                "Icom IC-7300 (USB CI-V)".into(),
-                RadioDriver::IcomCiv,
-                Some("IC-7300".into()),
-                path,
-                115_200,
-            );
-        } else if lower.contains("mchf") || lower.contains("uhsdr") {
-            add_radio_entry(
-                &mut entries,
-                file_name,
-                "mcHF (FT-817-compatible CAT)".into(),
-                RadioDriver::YaesuLegacyCat,
-                Some("FT-817ND".into()),
-                path,
-                4_800,
-            );
-        } else {
-            // Unknown serial radios remain selectable. The client chooses the
-            // protocol family; a failed open is reported for that candidate.
-            for (suffix, driver, model, baud) in [
-                ("icom", RadioDriver::IcomCiv, "CI-V (generic)", 115_200),
-                ("yaesu", RadioDriver::YaesuCat, "CAT (generic)", 38_400),
-                (
-                    "legacy_yaesu",
-                    RadioDriver::YaesuLegacyCat,
-                    "classic CAT (generic)",
-                    4_800,
-                ),
-                (
-                    "kenwood",
-                    RadioDriver::KenwoodCat,
-                    "PC control (generic)",
-                    115_200,
-                ),
-            ] {
-                add_radio_entry(
-                    &mut entries,
-                    format!("{file_name}:{suffix}"),
-                    format!("{file_name} ({model})"),
-                    driver,
-                    Some(model.into()),
-                    path.clone(),
-                    baud,
-                );
-            }
+        // Never infer a model or driver from a USB descriptor. Advertise each
+        // supported protocol as an explicit candidate and let QSONaut choose.
+        for spec in driver_specs() {
+            add_radio_entry(&mut entries, file_name.clone(), path.clone(), spec);
         }
     }
     Ok(ConfiguredRadioProvider::new(entries))
 }
 
+#[derive(Clone, Copy)]
+struct DriverSpec {
+    suffix: &'static str,
+    driver: RadioDriver,
+    model: &'static str,
+    baud: u32,
+}
+
+fn driver_specs() -> [DriverSpec; 4] {
+    [
+        DriverSpec {
+            suffix: "icom",
+            driver: RadioDriver::IcomCiv,
+            model: "CI-V (generic)",
+            baud: 115_200,
+        },
+        DriverSpec {
+            suffix: "yaesu",
+            driver: RadioDriver::YaesuCat,
+            model: "CAT (generic)",
+            baud: 38_400,
+        },
+        DriverSpec {
+            suffix: "legacy_yaesu",
+            driver: RadioDriver::YaesuLegacyCat,
+            model: "classic CAT (generic)",
+            baud: 4_800,
+        },
+        DriverSpec {
+            suffix: "kenwood",
+            driver: RadioDriver::KenwoodCat,
+            model: "PC control (generic)",
+            baud: 115_200,
+        },
+    ]
+}
+
 fn add_radio_entry(
     entries: &mut Vec<RadioProviderEntry>,
-    id: String,
-    label: String,
-    driver: RadioDriver,
-    model: Option<String>,
+    file_name: String,
     path: String,
-    baud: u32,
+    spec: DriverSpec,
 ) {
-    let factory_model = model.clone().unwrap_or_else(|| match driver {
-        RadioDriver::IcomCiv => "CI-V (generic)".into(),
-        RadioDriver::YaesuCat => "CAT (generic)".into(),
-        RadioDriver::YaesuLegacyCat => "classic CAT (generic)".into(),
-        RadioDriver::KenwoodCat => "PC control (generic)".into(),
-        RadioDriver::Rigctld => "CAT (generic)".into(),
-    });
+    let id = format!("{}:{}", file_name, spec.suffix);
+    let label = format!("{} ({})", file_name, spec.model);
     let factory_path = path.clone();
+    let factory_model = spec.model.to_owned();
     entries.push(RadioProviderEntry {
         info: RadioDeviceInfo {
             id,
             label,
-            driver,
-            model,
+            driver: spec.driver,
+            model: Some(spec.model.into()),
             transport: RadioTransportKind::UsbSerial,
             in_use: false,
         },
+        lease_id: path,
         open: Arc::new(move || {
             Ok(Arc::new(open_model(
                 &factory_model,
                 factory_path.clone(),
-                baud,
+                spec.baud,
                 0xE0,
             )?) as Arc<dyn Radio>)
         }),

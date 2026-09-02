@@ -85,6 +85,12 @@ read/write flags, every typed control with independent `readable` and
 use Rigwright debug names (for example `AfGain`, `RfPower`, and
 `NoiseReduction`) and must be treated as opaque by clients.
 
+`radio_devices` contains explicit driver candidates. A serial device may appear
+more than once, for example as `Icom CI-V` and `Yaesu CAT`; the client selects
+the candidate that matches the operator's chosen driver. HostBridge must not
+infer a driver or model from a USB descriptor, and candidates for one physical
+resource share one exclusive lease. Host paths remain private to the host.
+
 `capabilities.audio_sources` contains host-owned capture inputs. Each source
 has an opaque `id`, label, kind, and exact supported formats. Select one with:
 
@@ -241,10 +247,17 @@ keep transmit arming, sequencing, and explicit `set_ptt` safety separate.
 
 ## Reference Pi catalog
 
-The reference Pi at the time of this guide reported:
+The reference Pi at the time of this guide reported USB serial resources with
+multiple explicit generic driver candidates. A host may additionally provide
+model-specific candidates when it has an independently configured model, but
+the client must never assume one from the USB descriptor.
 
-- IC-7300, driver `icom_civ`, model `IC-7300`, USB serial;
-- mcHF, driver `yaesu_legacy_cat`, model `FT-817ND`, USB serial;
+For example, a serial resource may be advertised as:
+
+- driver `icom_civ`, model `CI-V (generic)`;
+- driver `yaesu_cat`, model `CAT (generic)`;
+- driver `yaesu_legacy_cat`, model `classic CAT (generic)`;
+- driver `kenwood_cat`, model `PC control (generic)`;
 - `hw:CARD=mchf,DEV=0`, PCM S16LE, stereo, 48 kHz;
 - `hw:CARD=CODEC,DEV=0`, PCM S16LE, mono, 48 kHz.
 
