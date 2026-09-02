@@ -513,6 +513,22 @@ mod tests {
     }
 
     #[test]
+    fn capability_operations_round_trip_with_typed_values() {
+        let message = ClientMessage::SetControl {
+            request_id: Some("control-1".into()),
+            control_id: control_id_key(ControlId::RfPower),
+            value: WireControlValue::U8(128),
+        };
+        let json = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ClientMessage>(&json).unwrap(),
+            message
+        );
+        assert_eq!(control_id_from_key("rfpower"), Some(ControlId::RfPower));
+        assert_eq!(WireMeterId::Signal, MeterId::Signal.into());
+    }
+
+    #[test]
     fn audio_header_round_trips() {
         let header = MediaFrameHeader {
             version: MEDIA_HEADER_VERSION,

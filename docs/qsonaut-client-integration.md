@@ -78,6 +78,13 @@ The host opens the selected driver lazily after acquiring its exclusive lease.
 A failed open is an error response; it is not permission for the client to
 guess a device path or silently try another radio.
 
+After `select_radio`, the host sends `radio_capabilities`. This is the
+authoritative Rigwright surface for that selected device. It includes core
+read/write flags, every typed control with independent `readable` and
+`writable` flags, supported normalized meters, and tuner support. Control IDs
+use Rigwright debug names (for example `AfGain`, `RfPower`, and
+`NoiseReduction`) and must be treated as opaque by clients.
+
 `capabilities.audio_sources` contains host-owned capture inputs. Each source
 has an opaque `id`, label, kind, and exact supported formats. Select one with:
 
@@ -129,6 +136,22 @@ audio stream activity never keys the radio. The client should send
 `set_ptt: false` before disconnecting and must treat host cleanup as the final
 fail-safe, not as a substitute for normal client behavior.
 
+Typed controls and meters use the same selected-radio lease:
+
+```json
+{ "type": "get_meter", "meter_id": "signal" }
+{ "type": "get_control", "control_id": "AfGain" }
+{ "type": "set_control", "control_id": "RfPower", "value": { "U8": 128 } }
+{ "type": "get_tuner_status" }
+{ "type": "start_tuner" }
+```
+
+Replies are `meter_value`, `control_value`, `tuner_status`, or `ack`. The host
+validates every ID and read/write direction against the selected Rigwright
+driver before issuing the operation. Meter values are normalized to `0..=255`.
+Use request IDs when correlating concurrent operations; the host echoes them in
+the corresponding value, acknowledgement, or error response.
+
 ## Text responses and liveness
 
 Successful commands use:
@@ -147,10 +170,9 @@ Errors are structured and should be surfaced with both fields retained:
 }
 ```
 
-The current protocol has an optional request ID field on acknowledgements but
-does not yet attach request IDs to every client command. QSONaut should
-correlate commands in order for now and keep the API ready for request IDs in a
-future protocol revision.
+All radio, audio-selection, and capability-operation commands carry an
+optional request ID. Clients may omit it for serialized convenience, but should
+send one when more than one operation can be in flight.
 
 The host periodically sends:
 
@@ -244,4 +266,6 @@ examples from one host, not a compile-time device list.
 - [ ] Force local PTT off on disconnect and reconnect.
 - [ ] Treat reconnect as a new session and reacquire all resources.
 - [ ] Keep client-to-host media disabled until `audio_playback` is advertised.
+- [ ] Build remote control, meter, and tuner UI from selected-radio
+  `radio_capabilities`; do not expose local hardware or raw control IDs.
 - [ ] Add integration fixtures for the reference catalog and binary frames.

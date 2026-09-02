@@ -746,4 +746,20 @@ mod tests {
         assert!(!provider.devices()[0].in_use);
         assert!(provider.acquire("usb-1").is_ok());
     }
+
+    #[test]
+    fn null_radio_capabilities_preserve_core_surface_without_inventing_controls() {
+        let radio = rigwright::NullRadio::new();
+        let capabilities = radio_capabilities(&radio);
+
+        assert!(capabilities.can_get_frequency);
+        assert!(capabilities.can_set_frequency);
+        assert!(capabilities.can_get_mode);
+        assert!(capabilities.can_set_mode);
+        assert!(capabilities.can_get_ptt);
+        assert!(capabilities.can_set_ptt);
+        assert!(capabilities.controls.is_empty());
+        assert!(capabilities.meters.is_empty());
+        assert!(!capabilities.tuner);
+    }
 }
