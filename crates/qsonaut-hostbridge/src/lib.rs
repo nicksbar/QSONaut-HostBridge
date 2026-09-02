@@ -353,13 +353,13 @@ impl HostBridge {
                     Some(Ok(Message::Text(text))) => {
                         last_activity = Instant::now();
                         if let Err(error) = self.dispatch(&mut sink, &mut selected_radio, &mut audio_rx, &mut selected_audio_sink, &text).await {
-                            send_json(&mut sink, &ServerMessage::Error { code: "request_failed".into(), message: error.to_string() }).await?;
+                            send_json(&mut sink, &ServerMessage::Error { code: "request_failed".into(), message: error.to_string(), request_id: None }).await?;
                         }
                     }
                     Some(Ok(Message::Binary(bytes))) => {
                         last_activity = Instant::now();
                         if let Err(error) = self.dispatch_binary(&selected_audio_sink, &bytes).await {
-                            send_json(&mut sink, &ServerMessage::Error { code: "media_failed".into(), message: error.to_string() }).await?;
+                            send_json(&mut sink, &ServerMessage::Error { code: "media_failed".into(), message: error.to_string(), request_id: None }).await?;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
@@ -373,7 +373,7 @@ impl HostBridge {
                     match frame {
                         Ok(frame) => {
                             if frame.pcm_s16le.len() > MAX_MEDIA_PAYLOAD_BYTES {
-                                send_json(&mut sink, &ServerMessage::Error { code: "media_frame_too_large".into(), message: "audio frame exceeds the HostBridge limit".into() }).await?;
+                                send_json(&mut sink, &ServerMessage::Error { code: "media_frame_too_large".into(), message: "audio frame exceeds the HostBridge limit".into(), request_id: None }).await?;
                                 continue;
                             }
                             let mut header = frame.header;
@@ -389,7 +389,7 @@ impl HostBridge {
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(count)) => {
-                            send_json(&mut sink, &ServerMessage::Error { code: "media_frames_dropped".into(), message: format!("audio consumer fell behind; dropped {count} frames") }).await?;
+                            send_json(&mut sink, &ServerMessage::Error { code: "media_frames_dropped".into(), message: format!("audio consumer fell behind; dropped {count} frames"), request_id: None }).await?;
                         }
                         Err(broadcast::error::RecvError::Closed) => audio_rx = None,
                     }
@@ -458,11 +458,15 @@ impl HostBridge {
                     &ServerMessage::Error {
                         code: "already_authenticated".into(),
                         message: "hello is only valid as the first message".into(),
+                        request_id: None,
                     },
                 )
                 .await?
             }
-            ClientMessage::SelectRadio { device_id } => {
+            ClientMessage::SelectRadio {
+                request_id,
+                device_id,
+            } => {
                 if let Some(previous) = selected_radio.take() {
                     if let Err(error) = previous.radio.set_ptt(false).await {
                         warn!(%error, "failed to force PTT off while changing radio selection");
@@ -474,39 +478,46 @@ impl HostBridge {
                     radio,
                     provider: self.radios.clone(),
                 });
-                send_json(sink, &ServerMessage::Ack { request_id: None }).await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
-            ClientMessage::GetState => {
+            ClientMessage::GetState { request_id: _ } => {
                 send_json(sink, &state_message(selected_radio.as_ref()).await?).await?
             }
-            ClientMessage::SetFrequency { frequency_hz } => {
+            ClientMessage::SetFrequency {
+                request_id,
+                frequency_hz,
+            } => {
                 selected_radio
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
                     .radio
                     .set_frequency_hz(frequency_hz)
                     .await?;
-                send_json(sink, &ServerMessage::Ack { request_id: None }).await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
-            ClientMessage::SetMode { mode } => {
+            ClientMessage::SetMode { request_id, mode } => {
                 selected_radio
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
                     .radio
                     .set_mode(Mode::from(mode))
                     .await?;
-                send_json(sink, &ServerMessage::Ack { request_id: None }).await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
-            ClientMessage::SetPtt { enabled } => {
+            ClientMessage::SetPtt {
+                request_id,
+                enabled,
+            } => {
                 selected_radio
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
                     .radio
                     .set_ptt(enabled)
                     .await?;
-                send_json(sink, &ServerMessage::Ack { request_id: None }).await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::SelectAudio {
+                request_id,
                 enabled,
                 source_id,
                 format,
@@ -528,9 +539,10 @@ impl HostBridge {
                     }
                     *audio_rx = Some(audio.subscribe(&source_id, &format)?);
                 }
-                send_json(sink, &ServerMessage::Ack { request_id: None }).await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::SelectAudioOutput {
+                request_id,
                 enabled,
                 output_id,
                 format,
@@ -552,7 +564,7 @@ impl HostBridge {
                     }
                     *selected_audio_sink = Some(outputs.open(&output_id, &format)?);
                 }
-                send_json(sink, &ServerMessage::Ack { request_id: None }).await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::Ping { nonce } => {
                 send_json(sink, &ServerMessage::Pong { nonce }).await?

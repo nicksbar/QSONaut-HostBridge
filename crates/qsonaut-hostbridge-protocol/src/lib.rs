@@ -118,24 +118,39 @@ pub enum MediaDirection {
 pub enum ClientMessage {
     Hello(ClientHello),
     SelectRadio {
+        #[serde(default)]
+        request_id: Option<String>,
         device_id: String,
     },
-    GetState,
+    GetState {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
     SetFrequency {
+        #[serde(default)]
+        request_id: Option<String>,
         frequency_hz: u64,
     },
     SetMode {
+        #[serde(default)]
+        request_id: Option<String>,
         mode: WireMode,
     },
     SetPtt {
+        #[serde(default)]
+        request_id: Option<String>,
         enabled: bool,
     },
     SelectAudio {
+        #[serde(default)]
+        request_id: Option<String>,
         enabled: bool,
         source_id: String,
         format: AudioFormat,
     },
     SelectAudioOutput {
+        #[serde(default)]
+        request_id: Option<String>,
         enabled: bool,
         output_id: String,
         format: AudioFormat,
@@ -152,11 +167,22 @@ pub enum ClientMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     Hello(HostHello),
-    Ping { nonce: u64 },
+    Ping {
+        nonce: u64,
+    },
     State(RadioState),
-    Ack { request_id: Option<String> },
-    Error { code: String, message: String },
-    Pong { nonce: u64 },
+    Ack {
+        request_id: Option<String>,
+    },
+    Error {
+        code: String,
+        message: String,
+        #[serde(default)]
+        request_id: Option<String>,
+    },
+    Pong {
+        nonce: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -281,10 +307,14 @@ mod tests {
     #[test]
     fn mode_wire_round_trip_is_stable() {
         let message = ClientMessage::SetMode {
+            request_id: None,
             mode: WireMode::CwReverse,
         };
         let json = serde_json::to_string(&message).unwrap();
-        assert_eq!(json, r#"{"type":"set_mode","mode":"CWREVERSE"}"#);
+        assert_eq!(
+            json,
+            r#"{"type":"set_mode","request_id":null,"mode":"CWREVERSE"}"#
+        );
         assert_eq!(
             serde_json::from_str::<ClientMessage>(&json).unwrap(),
             message
