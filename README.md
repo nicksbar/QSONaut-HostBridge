@@ -109,6 +109,14 @@ The automatic service installer currently targets Linux/systemd. The config
 and foreground runtime are portable Rust code, leaving room for launchd or a
 Windows-service adapter later.
 
+## Android shell / Termux
+
+HostBridge can also be built and run from an Android shell without root or
+systemd. See [docs/android-termux.md](docs/android-termux.md), or run
+`./scripts/install-termux.sh` after cloning. The protocol/runtime are portable,
+but the current radio and ALSA adapters are Linux-specific, so Android needs
+USB/audio adapters before it can enumerate and use local hardware.
+
 ## Raspberry Pi hardware adapter
 
 The executable dynamically scans `/dev/serial/by-id` and ALSA at startup. On

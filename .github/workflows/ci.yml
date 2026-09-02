@@ -43,3 +43,16 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
       - run: cargo test --locked --workspace --all-targets --target ${{ matrix.target }}
       - run: cargo build --locked --release -p qsonaut-hostbridge-app --target ${{ matrix.target }}
+
+  android-shell:
+    name: Android shell compile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Validate workspace metadata
+        run: cargo metadata --locked --no-deps --format-version 1
+      - run: cargo check --locked --workspace --all-targets --target aarch64-linux-android
+      - run: cargo clippy --locked --workspace --all-targets --target aarch64-linux-android -- -D warnings
