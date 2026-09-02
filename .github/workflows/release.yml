@@ -22,7 +22,7 @@ jobs:
     name: Validate release tag
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Match tag to workspace version
         shell: bash
@@ -61,7 +61,7 @@ jobs:
             archive: tar.gz
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -93,7 +93,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/$env:PACKAGE_NAME.exe" "$artifact/"
           Copy-Item README.md, LICENSE "$artifact/"
           Compress-Archive -Path $artifact -DestinationPath "$artifact.zip"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: hostbridge-${{ matrix.target }}
           path: |
@@ -106,7 +106,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: hostbridge-*
