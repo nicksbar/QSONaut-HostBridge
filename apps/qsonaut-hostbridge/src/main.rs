@@ -16,7 +16,9 @@ use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use tracing::info;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -370,7 +372,7 @@ impl AudioSource for AlsaAudioSource {
         let (sender, receiver) = tokio::sync::broadcast::channel(8);
         let device = source.id.clone();
         let channels = format.channels;
-        let mut child = Command::new("arecord")
+        let child = Command::new("arecord")
             .args([
                 "-D",
                 &device,
@@ -387,7 +389,29 @@ impl AudioSource for AlsaAudioSource {
             .stderr(Stdio::null())
             .spawn()
             .with_context(|| format!("start arecord for {device}"))?;
-        let mut output = child.stdout.take().context("capture arecord stdout")?;
+        let child = Arc::new(Mutex::new(child));
+        let mut output = child
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capture arecord process lock poisoned"))?
+            .stdout
+            .take()
+            .context("capture arecord stdout")?;
+        let capture_stopped = Arc::new(AtomicBool::new(false));
+        let watcher_child = child.clone();
+        let watcher_sender = sender.clone();
+        let watcher_stopped = capture_stopped.clone();
+        std::thread::spawn(move || {
+            while !watcher_stopped.load(Ordering::Relaxed) && watcher_sender.receiver_count() > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            if !watcher_stopped.load(Ordering::Relaxed) {
+                if let Ok(mut child) = watcher_child.lock() {
+                    let _ = child.kill();
+                }
+            }
+        });
+        info!(device = %device, channels, "HostBridge ALSA capture started");
+        let reader_stopped = capture_stopped;
         std::thread::spawn(move || {
             let mut sequence = 0_u64;
             let mut timestamp_samples = 0_u64;
@@ -396,7 +420,6 @@ impl AudioSource for AlsaAudioSource {
             let mut pcm = vec![0_u8; 960 * bytes_per_frame];
             loop {
                 if sender.receiver_count() == 0 {
-                    let _ = child.kill();
                     break;
                 }
                 if output.read_exact(&mut pcm).is_err() {
@@ -422,7 +445,12 @@ impl AudioSource for AlsaAudioSource {
                 sequence = sequence.wrapping_add(1);
                 timestamp_samples = timestamp_samples.wrapping_add(960);
             }
-            let _ = child.wait();
+            reader_stopped.store(true, Ordering::Relaxed);
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            info!(device = %device, "HostBridge ALSA capture stopped");
         });
         Ok(receiver)
     }
