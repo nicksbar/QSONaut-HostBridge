@@ -5,7 +5,7 @@
 //! endian PCM samples. This keeps the hot path compact and leaves room for a
 //! future Opus/codec negotiation without changing radio control messages.
 
-use rigwright::Mode;
+use rigwright::{ControlId, ControlValue, MeterId, Mode, TunerStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -51,6 +51,152 @@ pub struct RadioDeviceInfo {
     pub model: Option<String>,
     pub transport: RadioTransportKind,
     pub in_use: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RadioCapabilitiesInfo {
+    pub can_get_frequency: bool,
+    pub can_set_frequency: bool,
+    pub can_get_mode: bool,
+    pub can_set_mode: bool,
+    pub can_get_ptt: bool,
+    pub can_set_ptt: bool,
+    pub can_get_power: bool,
+    pub can_set_power: bool,
+    pub can_raw_protocol: bool,
+    pub controls: Vec<ControlCapability>,
+    pub meters: Vec<WireMeterId>,
+    pub tuner: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControlCapability {
+    pub id: String,
+    pub readable: bool,
+    pub writable: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum WireMeterId {
+    Signal,
+    Power,
+    Swr,
+    Alc,
+    Compression,
+    Current,
+    Voltage,
+    Temperature,
+}
+
+impl From<MeterId> for WireMeterId {
+    fn from(id: MeterId) -> Self {
+        match id {
+            MeterId::Signal => Self::Signal,
+            MeterId::Power => Self::Power,
+            MeterId::Swr => Self::Swr,
+            MeterId::Alc => Self::Alc,
+            MeterId::Compression => Self::Compression,
+            MeterId::Current => Self::Current,
+            MeterId::Voltage => Self::Voltage,
+            MeterId::Temperature => Self::Temperature,
+        }
+    }
+}
+
+impl From<WireMeterId> for MeterId {
+    fn from(id: WireMeterId) -> Self {
+        match id {
+            WireMeterId::Signal => Self::Signal,
+            WireMeterId::Power => Self::Power,
+            WireMeterId::Swr => Self::Swr,
+            WireMeterId::Alc => Self::Alc,
+            WireMeterId::Compression => Self::Compression,
+            WireMeterId::Current => Self::Current,
+            WireMeterId::Voltage => Self::Voltage,
+            WireMeterId::Temperature => Self::Temperature,
+        }
+    }
+}
+
+pub fn control_id_key(id: ControlId) -> String {
+    format!("{id:?}")
+}
+
+pub fn control_id_from_key(key: &str) -> Option<ControlId> {
+    ControlId::ALL
+        .iter()
+        .copied()
+        .find(|id| format!("{id:?}").eq_ignore_ascii_case(key))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WireControlValue {
+    Bool(bool),
+    U8(u8),
+    I32(i32),
+    U64(u64),
+    Mode(WireMode),
+    Vfo(u8),
+    Receiver(u8),
+    Text(String),
+    Raw(Vec<u8>),
+}
+
+impl From<ControlValue> for WireControlValue {
+    fn from(value: ControlValue) -> Self {
+        match value {
+            ControlValue::Bool(value) => Self::Bool(value),
+            ControlValue::U8(value) => Self::U8(value),
+            ControlValue::I32(value) => Self::I32(value),
+            ControlValue::U64(value) => Self::U64(value),
+            ControlValue::Mode(value) => Self::Mode(value.into()),
+            ControlValue::Vfo(value) => Self::Vfo(value),
+            ControlValue::Receiver(value) => Self::Receiver(value),
+            ControlValue::Text(value) => Self::Text(value),
+            ControlValue::Raw(value) => Self::Raw(value),
+        }
+    }
+}
+
+impl From<WireControlValue> for ControlValue {
+    fn from(value: WireControlValue) -> Self {
+        match value {
+            WireControlValue::Bool(value) => Self::Bool(value),
+            WireControlValue::U8(value) => Self::U8(value),
+            WireControlValue::I32(value) => Self::I32(value),
+            WireControlValue::U64(value) => Self::U64(value),
+            WireControlValue::Mode(value) => Self::Mode(value.into()),
+            WireControlValue::Vfo(value) => Self::Vfo(value),
+            WireControlValue::Receiver(value) => Self::Receiver(value),
+            WireControlValue::Text(value) => Self::Text(value),
+            WireControlValue::Raw(value) => Self::Raw(value),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WireTunerStatus {
+    pub enabled: bool,
+    pub tuning: bool,
+}
+
+impl From<TunerStatus> for WireTunerStatus {
+    fn from(status: TunerStatus) -> Self {
+        Self {
+            enabled: status.enabled,
+            tuning: status.tuning,
+        }
+    }
+}
+
+impl From<WireTunerStatus> for TunerStatus {
+    fn from(status: WireTunerStatus) -> Self {
+        Self {
+            enabled: status.enabled,
+            tuning: status.tuning,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -126,6 +272,30 @@ pub enum ClientMessage {
         #[serde(default)]
         request_id: Option<String>,
     },
+    GetControl {
+        #[serde(default)]
+        request_id: Option<String>,
+        control_id: String,
+    },
+    SetControl {
+        #[serde(default)]
+        request_id: Option<String>,
+        control_id: String,
+        value: WireControlValue,
+    },
+    GetMeter {
+        #[serde(default)]
+        request_id: Option<String>,
+        meter_id: WireMeterId,
+    },
+    StartTuner {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
+    GetTunerStatus {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
     SetFrequency {
         #[serde(default)]
         request_id: Option<String>,
@@ -171,6 +341,21 @@ pub enum ServerMessage {
         nonce: u64,
     },
     State(RadioState),
+    RadioCapabilities(RadioCapabilitiesInfo),
+    ControlValue {
+        request_id: Option<String>,
+        control_id: String,
+        value: Option<WireControlValue>,
+    },
+    MeterValue {
+        request_id: Option<String>,
+        meter_id: WireMeterId,
+        value: Option<u8>,
+    },
+    TunerStatus {
+        request_id: Option<String>,
+        status: Option<WireTunerStatus>,
+    },
     Ack {
         request_id: Option<String>,
     },
@@ -190,6 +375,12 @@ pub struct RadioState {
     pub frequency_hz: Option<u64>,
     pub mode: Option<WireMode>,
     pub ptt: Option<bool>,
+    #[serde(default)]
+    pub controls: std::collections::BTreeMap<String, WireControlValue>,
+    #[serde(default)]
+    pub meters: std::collections::BTreeMap<WireMeterId, u8>,
+    #[serde(default)]
+    pub tuner: Option<WireTunerStatus>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

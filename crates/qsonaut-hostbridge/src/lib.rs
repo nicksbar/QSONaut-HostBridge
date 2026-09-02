@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use qsonaut_hostbridge_protocol::*;
-use rigwright::{Mode, Radio};
+use rigwright::{ControlId, MeterId, Mode, Radio};
 use std::{collections::HashSet, net::SocketAddr, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -478,6 +478,14 @@ impl HostBridge {
                     radio,
                     provider: self.radios.clone(),
                 });
+                let capabilities = radio_capabilities(
+                    selected_radio
+                        .as_ref()
+                        .expect("radio selected")
+                        .radio
+                        .as_ref(),
+                );
+                send_json(sink, &ServerMessage::RadioCapabilities(capabilities)).await?;
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::GetState { request_id: _ } => {
@@ -515,6 +523,86 @@ impl HostBridge {
                     .set_ptt(enabled)
                     .await?;
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::GetControl {
+                request_id,
+                control_id,
+            } => {
+                let radio = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?;
+                let id = control_id_from_key(&control_id)
+                    .ok_or_else(|| anyhow::anyhow!("unknown control: {control_id}"))?;
+                if !radio.radio.supports_control_read(id) {
+                    anyhow::bail!("control is not readable: {control_id}")
+                }
+                let value = radio.radio.get_control(id).await?.map(Into::into);
+                send_json(
+                    sink,
+                    &ServerMessage::ControlValue {
+                        request_id,
+                        control_id,
+                        value,
+                    },
+                )
+                .await?;
+            }
+            ClientMessage::SetControl {
+                request_id,
+                control_id,
+                value,
+            } => {
+                let radio = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?;
+                let id = control_id_from_key(&control_id)
+                    .ok_or_else(|| anyhow::anyhow!("unknown control: {control_id}"))?;
+                if !radio.radio.supports_control_write(id) {
+                    anyhow::bail!("control is not writable: {control_id}")
+                }
+                radio.radio.set_control(id, value.into()).await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::GetMeter {
+                request_id,
+                meter_id,
+            } => {
+                let radio = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?;
+                let id = MeterId::from(meter_id);
+                if !radio.radio.supports_meter(id) {
+                    anyhow::bail!("meter is not supported")
+                }
+                let value = radio.radio.get_meter(id).await?;
+                send_json(
+                    sink,
+                    &ServerMessage::MeterValue {
+                        request_id,
+                        meter_id,
+                        value,
+                    },
+                )
+                .await?;
+            }
+            ClientMessage::StartTuner { request_id } => {
+                selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .start_tuner()
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::GetTunerStatus { request_id } => {
+                let status = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .get_tuner_status()
+                    .await?
+                    .map(Into::into);
+                send_json(sink, &ServerMessage::TunerStatus { request_id, status }).await?;
             }
             ClientMessage::SelectAudio {
                 request_id,
@@ -583,7 +671,41 @@ async fn state_message(radio: Option<&RadioSelection>) -> Result<ServerMessage> 
         frequency_hz: radio.radio.get_frequency_hz().await.ok(),
         mode: radio.radio.get_mode().await.ok().map(Into::into),
         ptt: radio.radio.get_ptt().await.ok(),
+        controls: std::collections::BTreeMap::new(),
+        meters: std::collections::BTreeMap::new(),
+        tuner: None,
     }))
+}
+
+fn radio_capabilities(radio: &dyn Radio) -> RadioCapabilitiesInfo {
+    let caps = radio.capabilities();
+    RadioCapabilitiesInfo {
+        can_get_frequency: caps.can_get_frequency,
+        can_set_frequency: caps.can_set_frequency,
+        can_get_mode: caps.can_get_mode,
+        can_set_mode: caps.can_set_mode,
+        can_get_ptt: caps.can_get_ptt,
+        can_set_ptt: caps.can_set_ptt,
+        can_get_power: caps.can_get_power,
+        can_set_power: caps.can_set_power,
+        can_raw_protocol: caps.can_raw_protocol,
+        controls: ControlId::ALL
+            .iter()
+            .copied()
+            .filter(|id| radio.supports_control(*id))
+            .map(|id| ControlCapability {
+                id: control_id_key(id),
+                readable: radio.supports_control_read(id),
+                writable: radio.supports_control_write(id),
+            })
+            .collect(),
+        meters: radio
+            .supported_meters()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        tuner: radio.supports_control(ControlId::Tuner),
+    }
 }
 
 async fn send_json<S>(sink: &mut S, message: &ServerMessage) -> Result<()>
