@@ -6,14 +6,18 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use qsonaut_hostbridge_protocol::*;
 use rigwright::{Mode, Radio};
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashSet, net::SocketAddr, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::broadcast,
+    time::{self, Duration, Instant},
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{info, warn};
 use uuid::Uuid;
+
+const MAX_MEDIA_PAYLOAD_BYTES: usize = 1_048_576;
+const MAX_MEDIA_FRAME_BYTES: usize = MediaFrameHeader::BYTES + MAX_MEDIA_PAYLOAD_BYTES;
 
 #[derive(Debug, Clone)]
 pub struct HostConfig {
@@ -48,7 +52,7 @@ impl Authorizer for StaticAuthorizer {
 
 #[derive(Debug, Clone)]
 pub struct AudioFrame {
-    pub header: AudioFrameHeader,
+    pub header: MediaFrameHeader,
     pub pcm_s16le: Arc<[u8]>,
 }
 
@@ -64,12 +68,85 @@ pub trait AudioSource: Send + Sync {
     ) -> Result<broadcast::Receiver<AudioFrame>>;
 }
 
+/// Host-side consumer for client-to-host media. Implementations must enqueue
+/// into a bounded device/modem queue and return immediately; a slow consumer
+/// must not block radio control.
+pub trait AudioSink: Send + Sync {
+    fn try_submit(&self, frame: AudioFrame) -> Result<()>;
+}
+
 /// Host-owned radio catalog. Implementations enumerate USB/serial devices and
 /// open the selected Rigwright driver without exposing device paths to clients.
 pub trait RadioProvider: Send + Sync {
     fn devices(&self) -> Vec<RadioDeviceInfo>;
     fn acquire(&self, device_id: &str) -> Result<Arc<dyn Radio>>;
     fn release(&self, device_id: &str);
+}
+
+/// A host-owned catalog entry backed by a lazy Rigwright factory. The factory
+/// is called only after the client has acquired the exclusive lease.
+pub struct RadioProviderEntry {
+    pub info: RadioDeviceInfo,
+    pub open: Arc<dyn Fn() -> Result<Arc<dyn Radio>> + Send + Sync>,
+}
+
+pub struct ConfiguredRadioProvider {
+    entries: Vec<RadioProviderEntry>,
+    in_use: std::sync::Mutex<HashSet<String>>,
+}
+
+impl ConfiguredRadioProvider {
+    pub fn new(entries: Vec<RadioProviderEntry>) -> Self {
+        Self {
+            entries,
+            in_use: std::sync::Mutex::new(HashSet::new()),
+        }
+    }
+}
+
+impl RadioProvider for ConfiguredRadioProvider {
+    fn devices(&self) -> Vec<RadioDeviceInfo> {
+        let in_use = self.in_use.lock().ok();
+        self.entries
+            .iter()
+            .map(|entry| {
+                let mut info = entry.info.clone();
+                info.in_use = in_use
+                    .as_ref()
+                    .map(|leases| leases.contains(&info.id))
+                    .unwrap_or(true);
+                info
+            })
+            .collect()
+    }
+
+    fn acquire(&self, device_id: &str) -> Result<Arc<dyn Radio>> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.info.id == device_id)
+            .ok_or_else(|| anyhow::anyhow!("radio device is unavailable"))?;
+        let mut leases = self
+            .in_use
+            .lock()
+            .map_err(|_| anyhow::anyhow!("radio reservation lock poisoned"))?;
+        if !leases.insert(device_id.to_owned()) {
+            anyhow::bail!("radio device is already in use")
+        }
+        match (entry.open)() {
+            Ok(radio) => Ok(radio),
+            Err(error) => {
+                leases.remove(device_id);
+                Err(error)
+            }
+        }
+    }
+
+    fn release(&self, device_id: &str) {
+        if let Ok(mut leases) = self.in_use.lock() {
+            leases.remove(device_id);
+        }
+    }
 }
 
 pub struct FixedRadioProvider {
@@ -126,6 +203,14 @@ struct RadioSelection {
     provider: Arc<dyn RadioProvider>,
 }
 
+async fn fail_safe_ptt(selected_radio: &mut Option<RadioSelection>) {
+    if let Some(selection) = selected_radio.as_ref() {
+        if let Err(error) = selection.radio.set_ptt(false).await {
+            warn!(%error, "failed to force radio PTT off during session cleanup");
+        }
+    }
+}
+
 impl Drop for RadioSelection {
     fn drop(&mut self) {
         self.provider.release(&self.id);
@@ -137,6 +222,7 @@ pub struct HostBridge {
     config: HostConfig,
     radios: Arc<dyn RadioProvider>,
     audio: Option<Arc<dyn AudioSource>>,
+    audio_sink: Option<Arc<dyn AudioSink>>,
     authorizer: Arc<dyn Authorizer>,
 }
 
@@ -147,10 +233,21 @@ impl HostBridge {
         audio: Option<Arc<dyn AudioSource>>,
         authorizer: Arc<dyn Authorizer>,
     ) -> Self {
+        Self::new_with_audio_sink(config, radios, audio, None, authorizer)
+    }
+
+    pub fn new_with_audio_sink(
+        config: HostConfig,
+        radios: Arc<dyn RadioProvider>,
+        audio: Option<Arc<dyn AudioSource>>,
+        audio_sink: Option<Arc<dyn AudioSink>>,
+        authorizer: Arc<dyn Authorizer>,
+    ) -> Self {
         Self {
             config,
             radios,
             audio,
+            audio_sink,
             authorizer,
         }
     }
@@ -191,6 +288,10 @@ impl HostBridge {
             radio_control: !self.radios.devices().is_empty(),
             radio_devices: self.radios.devices(),
             audio_capture: self.audio.is_some(),
+            audio_playback: self.audio_sink.is_some(),
+            media_codecs: (self.audio.is_some() || self.audio_sink.is_some())
+                .then_some(vec![AudioCodec::PcmS16Le])
+                .unwrap_or_default(),
             audio_sources: self.audio.as_ref().map(|a| a.sources()).unwrap_or_default(),
         };
         send_json(
@@ -208,20 +309,96 @@ impl HostBridge {
         // client what can be selected without starting a stream implicitly.
         let mut audio_rx: Option<broadcast::Receiver<AudioFrame>> = None;
         let mut selected_radio: Option<RadioSelection> = None;
+        let mut heartbeat = time::interval(Duration::from_secs(15));
+        let mut last_activity = Instant::now();
+        let mut heartbeat_nonce = 0_u64;
         loop {
             tokio::select! {
                 message = source.next() => match message {
-                    Some(Ok(Message::Text(text))) => self.dispatch(&mut sink, &mut selected_radio, &mut audio_rx, &text).await?,
+                    Some(Ok(Message::Text(text))) => {
+                        last_activity = Instant::now();
+                        if let Err(error) = self.dispatch(&mut sink, &mut selected_radio, &mut audio_rx, &text).await {
+                            send_json(&mut sink, &ServerMessage::Error { code: "request_failed".into(), message: error.to_string() }).await?;
+                        }
+                    }
+                    Some(Ok(Message::Binary(bytes))) => {
+                        last_activity = Instant::now();
+                        if let Err(error) = self.dispatch_binary(&bytes).await {
+                            send_json(&mut sink, &ServerMessage::Error { code: "media_failed".into(), message: error.to_string() }).await?;
+                        }
+                    }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {},
-                    Some(Err(error)) => return Err(error.into()),
+                    Some(Err(error)) => {
+                        fail_safe_ptt(&mut selected_radio).await;
+                        return Err(error.into());
+                    }
                 },
                 frame = async { audio_rx.as_mut().unwrap().recv().await }, if audio_rx.is_some() => {
-                    if let Ok(frame) = frame { let mut payload = Vec::with_capacity(AudioFrameHeader::BYTES + frame.pcm_s16le.len()); frame.header.encode(&mut payload); payload.extend_from_slice(&frame.pcm_s16le); sink.send(Message::Binary(payload.into())).await?; }
+                    match frame {
+                        Ok(frame) => {
+                            if frame.pcm_s16le.len() > MAX_MEDIA_PAYLOAD_BYTES {
+                                send_json(&mut sink, &ServerMessage::Error { code: "media_frame_too_large".into(), message: "audio frame exceeds the HostBridge limit".into() }).await?;
+                                continue;
+                            }
+                            let mut header = frame.header;
+                            header.version = MEDIA_HEADER_VERSION;
+                            header.direction = MediaDirection::HostToClient;
+                            header.payload_bytes = frame.pcm_s16le.len() as u32;
+                            let mut payload = Vec::with_capacity(MediaFrameHeader::BYTES + frame.pcm_s16le.len());
+                            header.encode(&mut payload);
+                            payload.extend_from_slice(&frame.pcm_s16le);
+                            if let Err(error) = sink.send(Message::Binary(payload.into())).await {
+                                fail_safe_ptt(&mut selected_radio).await;
+                                return Err(error.into());
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(count)) => {
+                            send_json(&mut sink, &ServerMessage::Error { code: "media_frames_dropped".into(), message: format!("audio consumer fell behind; dropped {count} frames") }).await?;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => audio_rx = None,
+                    }
+                },
+                _ = heartbeat.tick() => {
+                    if last_activity.elapsed() > Duration::from_secs(45) {
+                        fail_safe_ptt(&mut selected_radio).await;
+                        anyhow::bail!("client heartbeat timed out");
+                    }
+                    heartbeat_nonce = heartbeat_nonce.wrapping_add(1);
+                    send_json(&mut sink, &ServerMessage::Ping { nonce: heartbeat_nonce }).await?;
                 }
             }
         }
+        fail_safe_ptt(&mut selected_radio).await;
         Ok(())
+    }
+
+    async fn dispatch_binary(&self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() < MediaFrameHeader::BYTES {
+            anyhow::bail!("media frame is shorter than its header")
+        }
+        let header = MediaFrameHeader::decode(bytes)
+            .ok_or_else(|| anyhow::anyhow!("invalid media frame header"))?;
+        if header.version != MEDIA_HEADER_VERSION {
+            anyhow::bail!("unsupported media header version {}", header.version)
+        }
+        if header.direction != MediaDirection::ClientToHost {
+            anyhow::bail!("client media frame has the wrong direction")
+        }
+        if header.payload_bytes as usize != bytes.len() - MediaFrameHeader::BYTES {
+            anyhow::bail!("media payload length does not match its frame")
+        }
+        if bytes.len() > MAX_MEDIA_FRAME_BYTES {
+            anyhow::bail!("media frame exceeds the HostBridge limit")
+        }
+        let sink = self
+            .audio_sink
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("audio playback is unavailable"))?;
+        sink.try_submit(AudioFrame {
+            header,
+            pcm_s16le: Arc::from(bytes[MediaFrameHeader::BYTES..].to_vec()),
+        })
     }
 
     async fn dispatch<S>(
@@ -312,6 +489,7 @@ impl HostBridge {
             ClientMessage::Ping { nonce } => {
                 send_json(sink, &ServerMessage::Pong { nonce }).await?
             }
+            ClientMessage::Pong { .. } => {}
         }
         Ok(())
     }

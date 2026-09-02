@@ -19,27 +19,69 @@ does not need direct access to the host's serial or audio device paths.
   then selects the exact input to stream.
 - One access key/password authorizer seam, with a static implementation for the
   first executable.
-- `NullRadio` wiring so the service can build and run before physical adapter
-  configuration is added.
+- A Raspberry Pi adapter that discovers the configured stable-by-id USB
+  interfaces for an IC-7300 and mcHF, opens the selected Rigwright profile,
+  and captures their ALSA USB audio inputs as 48 kHz PCM.
 
-## Run the scaffold
+## Install and run
+
+The executable has a guided, user-level Linux installation path. Build or
+download the executable, then run:
 
 ```sh
-QSONAUT_HOSTBRIDGE_KEY=station-1 \
-QSONAUT_HOSTBRIDGE_PASSWORD='change-me' \
-cargo run -p qsonaut-hostbridge-app
+qsonaut-hostbridge config set
+qsonaut-hostbridge config show
+qsonaut-hostbridge service install
 ```
 
-The current executable intentionally uses Rigwright's `NullRadio`. The next
-adapter should construct the appropriate Rigwright profile/driver and an
-`AudioSource`. That adapter should enumerate the Raspberry Pi's USB/radio
-audio inputs as `AudioSourceInfo` records and subscribe to the selected source;
-neither requires changing the wire protocol.
+`config set` asks for the access key and password, and accepts `--bind` and
+`--name` for non-default listener settings. The configuration is stored at
+`$XDG_CONFIG_HOME/qsonaut-hostbridge/config.json` (or
+`~/.config/qsonaut-hostbridge/config.json`) with mode `0600`. This first
+version intentionally keeps the password readable through `config show`, as
+requested for easy station administration.
+
+The service commands are deliberately simple:
+
+```sh
+qsonaut-hostbridge service status
+qsonaut-hostbridge service restart
+qsonaut-hostbridge service stop
+qsonaut-hostbridge service uninstall
+qsonaut-hostbridge config reset
+```
+
+`service install` writes a systemd user unit, enables it for the user's login,
+and starts it. It does not require root. Use `loginctl enable-linger "$USER"`
+if the host must keep running when that user is not logged in. The service
+installer currently targets Linux/systemd; the config and foreground `run`
+command are portable Rust code, leaving room for a launchd/Windows-service
+adapter later.
+
+For development, the foreground command is useful:
+
+```sh
+cargo run -p qsonaut-hostbridge-app -- config set --key station-1 --password change-me
+cargo run -p qsonaut-hostbridge-app -- run
+```
+
+The executable currently includes a Raspberry Pi adapter for the observed
+station hardware:
+
+- `usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_IC-7300_02015102-if00`
+  opens the `IC-7300` Icom CI-V profile at 115200 baud.
+- `usb-UHSDR_Community__based_on_STM_Drivers__USB_Interface_mchf_00000000002A-if00`
+  opens the `FT-817ND`-compatible classic CAT profile at 4800 baud.
+- `hw:CARD=CODEC,DEV=0` and `hw:CARD=mchf,DEV=0` are advertised as named ALSA
+  capture sources and streamed as 48 kHz S16LE PCM.
+
+The client sees only these stable IDs and labels. The raw serial paths remain
+host-local and are opened lazily after an exclusive radio lease is acquired.
 
 Radio selection follows the same pattern: a `RadioProvider` enumerates stable
-host-side IDs and opens the selected Rigwright driver. The executable currently
-publishes only `null-radio`; physical USB/serial enumeration is the next adapter
-step.
+host-side IDs and opens the selected Rigwright driver. The current adapter is
+intentionally configured for this Pi's two radios; a later installer/config
+surface should discover and persist additional station profiles.
 
 This supports the normal profile workflow: connect a different USB radio to the
 host, refresh the host catalog, select the new device/driver from QSONaut, and

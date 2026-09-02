@@ -1,7 +1,7 @@
 //! Stable, transport-neutral contracts between QSONaut and a HostBridge.
 //!
 //! Control messages are JSON text frames. Audio is deliberately not JSON: it
-//! is sent as binary frames with an [`AudioFrameHeader`] followed by little
+//! is sent as binary frames with a [`MediaFrameHeader`] followed by little
 //! endian PCM samples. This keeps the hot path compact and leaves room for a
 //! future Opus/codec negotiation without changing radio control messages.
 
@@ -9,7 +9,8 @@ use rigwright::Mode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
+pub const MEDIA_HEADER_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientHello {
@@ -32,6 +33,8 @@ pub struct Capabilities {
     pub radio_control: bool,
     pub radio_devices: Vec<RadioDeviceInfo>,
     pub audio_capture: bool,
+    pub audio_playback: bool,
+    pub media_codecs: Vec<AudioCodec>,
     /// Physical or logical capture inputs available on the host. The client
     /// selects one by stable ID rather than guessing a device path.
     pub audio_sources: Vec<AudioSourceInfo>,
@@ -94,6 +97,13 @@ pub enum AudioCodec {
     PcmS16Le,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaDirection {
+    HostToClient,
+    ClientToHost,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
@@ -119,12 +129,16 @@ pub enum ClientMessage {
     Ping {
         nonce: u64,
     },
+    Pong {
+        nonce: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     Hello(HostHello),
+    Ping { nonce: u64 },
     State(RadioState),
     Ack { request_id: Option<String> },
     Error { code: String, message: String },
@@ -187,21 +201,38 @@ impl From<WireMode> for Mode {
     }
 }
 
-/// Binary audio payload header. All integer fields are little endian.
+/// Binary media payload header. All integer fields are little endian.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AudioFrameHeader {
+pub struct MediaFrameHeader {
+    pub version: u8,
+    pub stream_id: u32,
+    pub direction: MediaDirection,
+    pub codec: AudioCodec,
     pub sequence: u64,
+    pub timestamp_samples: u64,
     pub sample_rate_hz: u32,
     pub channels: u8,
+    pub payload_bytes: u32,
 }
 
-impl AudioFrameHeader {
-    pub const BYTES: usize = 13;
+impl MediaFrameHeader {
+    pub const BYTES: usize = 1 + 4 + 1 + 1 + 8 + 8 + 4 + 1 + 4;
 
     pub fn encode(self, output: &mut Vec<u8>) {
+        output.push(self.version);
+        output.extend_from_slice(&self.stream_id.to_le_bytes());
+        output.push(match self.direction {
+            MediaDirection::HostToClient => 0,
+            MediaDirection::ClientToHost => 1,
+        });
+        output.push(match self.codec {
+            AudioCodec::PcmS16Le => 0,
+        });
         output.extend_from_slice(&self.sequence.to_le_bytes());
+        output.extend_from_slice(&self.timestamp_samples.to_le_bytes());
         output.extend_from_slice(&self.sample_rate_hz.to_le_bytes());
         output.push(self.channels);
+        output.extend_from_slice(&self.payload_bytes.to_le_bytes());
     }
 
     pub fn decode(input: &[u8]) -> Option<Self> {
@@ -209,9 +240,22 @@ impl AudioFrameHeader {
             return None;
         }
         Some(Self {
-            sequence: u64::from_le_bytes(input[0..8].try_into().ok()?),
-            sample_rate_hz: u32::from_le_bytes(input[8..12].try_into().ok()?),
-            channels: input[12],
+            version: input[0],
+            stream_id: u32::from_le_bytes(input[1..5].try_into().ok()?),
+            direction: match input[5] {
+                0 => MediaDirection::HostToClient,
+                1 => MediaDirection::ClientToHost,
+                _ => return None,
+            },
+            codec: match input[6] {
+                0 => AudioCodec::PcmS16Le,
+                _ => return None,
+            },
+            sequence: u64::from_le_bytes(input[7..15].try_into().ok()?),
+            timestamp_samples: u64::from_le_bytes(input[15..23].try_into().ok()?),
+            sample_rate_hz: u32::from_le_bytes(input[23..27].try_into().ok()?),
+            channels: input[27],
+            payload_bytes: u32::from_le_bytes(input[28..32].try_into().ok()?),
         })
     }
 }
@@ -235,13 +279,39 @@ mod tests {
 
     #[test]
     fn audio_header_round_trips() {
-        let header = AudioFrameHeader {
+        let header = MediaFrameHeader {
+            version: MEDIA_HEADER_VERSION,
+            stream_id: 2,
+            direction: MediaDirection::HostToClient,
+            codec: AudioCodec::PcmS16Le,
             sequence: 7,
+            timestamp_samples: 336_000,
             sample_rate_hz: 48_000,
             channels: 1,
+            payload_bytes: 1920,
         };
         let mut bytes = Vec::new();
         header.encode(&mut bytes);
-        assert_eq!(AudioFrameHeader::decode(&bytes), Some(header));
+        assert_eq!(MediaFrameHeader::decode(&bytes), Some(header));
+    }
+
+    #[test]
+    fn media_header_rejects_unknown_direction_and_preserves_payload_length() {
+        let header = MediaFrameHeader {
+            version: MEDIA_HEADER_VERSION,
+            stream_id: 1,
+            direction: MediaDirection::ClientToHost,
+            codec: AudioCodec::PcmS16Le,
+            sequence: 1,
+            timestamp_samples: 0,
+            sample_rate_hz: 48_000,
+            channels: 1,
+            payload_bytes: 4,
+        };
+        let mut bytes = Vec::new();
+        header.encode(&mut bytes);
+        assert_eq!(MediaFrameHeader::decode(&bytes), Some(header));
+        bytes[5] = 99;
+        assert!(MediaFrameHeader::decode(&bytes).is_none());
     }
 }
