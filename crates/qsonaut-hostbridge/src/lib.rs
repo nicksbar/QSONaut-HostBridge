@@ -424,6 +424,11 @@ impl HostBridge {
                 .await?
             }
             ClientMessage::SelectRadio { device_id } => {
+                if let Some(previous) = selected_radio.take() {
+                    if let Err(error) = previous.radio.set_ptt(false).await {
+                        warn!(%error, "failed to force PTT off while changing radio selection");
+                    }
+                }
                 let radio = self.radios.acquire(&device_id)?;
                 *selected_radio = Some(RadioSelection {
                     id: device_id,
