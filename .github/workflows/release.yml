@@ -16,6 +16,7 @@ permissions:
 
 env:
   PACKAGE_NAME: qsonaut-hostbridge-app
+  BINARY_NAME: qsonaut-hostbridge
 
 jobs:
   validate:
@@ -69,7 +70,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - name: Build release binary
-        run: cargo build --locked --release -p "$PACKAGE_NAME" --target "${{ matrix.target }}"
+        run: cargo build --locked --release -p qsonaut-hostbridge-app --target "${{ matrix.target }}"
       - name: Package Unix artifact
         if: runner.os != 'Windows'
         shell: bash
@@ -79,7 +80,7 @@ jobs:
           set -euo pipefail
           artifact="${PACKAGE_NAME}-${RELEASE_TAG}-${{ matrix.target }}"
           mkdir "$artifact"
-          cp "target/${{ matrix.target }}/release/${PACKAGE_NAME}" "$artifact/"
+          cp "target/${{ matrix.target }}/release/${BINARY_NAME}" "$artifact/"
           cp README.md LICENSE "$artifact/"
           tar -czf "${artifact}.tar.gz" "$artifact"
       - name: Package Windows artifact
@@ -90,7 +91,7 @@ jobs:
         run: |
           $artifact = "$env:PACKAGE_NAME-$env:RELEASE_TAG-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $artifact | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/$env:PACKAGE_NAME.exe" "$artifact/"
+          Copy-Item "target/${{ matrix.target }}/release/${env:BINARY_NAME}.exe" "$artifact/"
           Copy-Item README.md, LICENSE "$artifact/"
           Compress-Archive -Path $artifact -DestinationPath "$artifact.zip"
       - uses: actions/upload-artifact@v7
