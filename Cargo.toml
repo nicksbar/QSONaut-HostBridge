@@ -17,7 +17,7 @@ anyhow = "1"
 async-trait = "0.1"
 futures-util = "0.3"
 qsonaut-hostbridge = { path = "crates/qsonaut-hostbridge" }
-rigwright = { path = "../rigwright", version = "0.1.20" }
+rigwright = { git = "https://github.com/nicksbar/rigwright.git", rev = "fbf0a256e777485f96535069f333833795057f54", version = "0.1.20" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

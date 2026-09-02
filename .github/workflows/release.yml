@@ -47,7 +47,7 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
-          - runner: ubuntu-24.04
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
           - runner: windows-2025
@@ -68,18 +68,8 @@ jobs:
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libudev-dev
-      - name: Install cross
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cargo install cross --locked
       - name: Build release binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            cross build --locked --release -p "$PACKAGE_NAME" --target "${{ matrix.target }}"
-          else
-            cargo build --locked --release -p "$PACKAGE_NAME" --target "${{ matrix.target }}"
-          fi
+        run: cargo build --locked --release -p "$PACKAGE_NAME" --target "${{ matrix.target }}"
       - name: Package Unix artifact
         if: runner.os != 'Windows'
         shell: bash
@@ -132,4 +122,3 @@ jobs:
             --verify-tag \
             --generate-notes \
             --title "QSONaut HostBridge $RELEASE_TAG"
-
