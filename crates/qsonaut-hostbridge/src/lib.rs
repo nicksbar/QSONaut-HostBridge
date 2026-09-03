@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use qsonaut_hostbridge_protocol::*;
-use rigwright::{ControlId, MeterId, Mode, Radio};
+use rigwright::{ControlId, IcomCiVRadio, MeterId, Mode, Radio};
 use std::{collections::HashSet, net::SocketAddr, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -86,8 +86,16 @@ pub trait AudioOutputProvider: Send + Sync {
 /// open the selected Rigwright driver without exposing device paths to clients.
 pub trait RadioProvider: Send + Sync {
     fn devices(&self) -> Vec<RadioDeviceInfo>;
-    fn acquire(&self, device_id: &str, request: &RadioOpenRequest) -> Result<Arc<dyn Radio>>;
+    fn acquire(&self, device_id: &str, request: &RadioOpenRequest) -> Result<RadioSession>;
     fn release(&self, device_id: &str);
+}
+
+/// The generic control surface plus any driver-specific services exposed by
+/// the selected physical radio. Keeping this composite prevents HostBridge
+/// from erasing CI-V scope access when it creates the control trait object.
+pub struct RadioSession {
+    pub radio: Arc<dyn Radio>,
+    pub civ_scope: Option<Arc<IcomCiVRadio>>,
 }
 
 /// Client-selected driver configuration passed to the host adapter. The host
@@ -101,7 +109,7 @@ pub struct RadioOpenRequest {
     pub radio_address: Option<u8>,
 }
 
-pub type RadioFactory = Arc<dyn Fn(&RadioOpenRequest) -> Result<Arc<dyn Radio>> + Send + Sync>;
+pub type RadioFactory = Arc<dyn Fn(&RadioOpenRequest) -> Result<RadioSession> + Send + Sync>;
 
 /// A host-owned catalog entry backed by a lazy Rigwright factory. The factory
 /// is called only after the client has acquired the exclusive lease.
@@ -141,7 +149,7 @@ impl RadioProvider for ConfiguredRadioProvider {
             .collect()
     }
 
-    fn acquire(&self, device_id: &str, request: &RadioOpenRequest) -> Result<Arc<dyn Radio>> {
+    fn acquire(&self, device_id: &str, request: &RadioOpenRequest) -> Result<RadioSession> {
         let entry = self
             .entries
             .iter()
@@ -193,7 +201,7 @@ impl RadioProvider for FixedRadioProvider {
         vec![device]
     }
 
-    fn acquire(&self, device_id: &str, _request: &RadioOpenRequest) -> Result<Arc<dyn Radio>> {
+    fn acquire(&self, device_id: &str, _request: &RadioOpenRequest) -> Result<RadioSession> {
         if device_id == self.device.id {
             let mut in_use = self
                 .in_use
@@ -203,7 +211,10 @@ impl RadioProvider for FixedRadioProvider {
                 anyhow::bail!("radio device is already in use")
             }
             *in_use = true;
-            Ok(self.radio.clone())
+            Ok(RadioSession {
+                radio: self.radio.clone(),
+                civ_scope: None,
+            })
         } else {
             anyhow::bail!("radio device is unavailable")
         }
@@ -221,6 +232,7 @@ impl RadioProvider for FixedRadioProvider {
 struct RadioSelection {
     id: String,
     radio: Arc<dyn Radio>,
+    civ_scope: Option<Arc<IcomCiVRadio>>,
     provider: Arc<dyn RadioProvider>,
 }
 
@@ -359,6 +371,7 @@ impl HostBridge {
         let mut selected_audio_sink = self.audio_sink.clone();
         let mut selected_radio: Option<RadioSelection> = None;
         let mut heartbeat = time::interval(Duration::from_secs(15));
+        let mut scope_poll = time::interval(Duration::from_millis(40));
         let mut last_activity = Instant::now();
         let mut heartbeat_nonce = 0_u64;
         loop {
@@ -415,6 +428,16 @@ impl HostBridge {
                     }
                     heartbeat_nonce = heartbeat_nonce.wrapping_add(1);
                     send_json(&mut sink, &ServerMessage::Ping { nonce: heartbeat_nonce }).await?;
+                }
+                _ = scope_poll.tick(), if selected_radio.as_ref().and_then(|radio| radio.civ_scope.as_ref()).is_some() => {
+                    let scope = selected_radio.as_ref().and_then(|radio| radio.civ_scope.clone());
+                    if let Some(scope) = scope {
+                        for bins in scope.drain_scope_waveform_sweeps(Duration::from_millis(25)).await.unwrap_or_default() {
+                            if !bins.is_empty() {
+                                send_json(&mut sink, &ServerMessage::ScopeFrame { bins }).await?;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -490,7 +513,7 @@ impl HostBridge {
                         warn!(%error, "failed to force PTT off while changing radio selection");
                     }
                 }
-                let radio = self.radios.acquire(
+                let session = self.radios.acquire(
                     &device_id,
                     &RadioOpenRequest {
                         driver,
@@ -499,18 +522,37 @@ impl HostBridge {
                         radio_address,
                     },
                 )?;
+                let radio = session.radio;
                 *selected_radio = Some(RadioSelection {
                     id: device_id,
                     radio,
+                    civ_scope: session.civ_scope,
                     provider: self.radios.clone(),
                 });
-                let capabilities = radio_capabilities(
+                let mut capabilities = radio_capabilities(
                     selected_radio
                         .as_ref()
                         .expect("radio selected")
                         .radio
                         .as_ref(),
                 );
+                capabilities.scope = selected_radio
+                    .as_ref()
+                    .and_then(|selection| selection.civ_scope.as_ref())
+                    .is_some_and(|scope| scope.supports_scope());
+                if capabilities.scope {
+                    if let Some(scope) = selected_radio
+                        .as_ref()
+                        .and_then(|selection| selection.civ_scope.clone())
+                    {
+                        if let Err(error) =
+                            scope.enable_spectrum_stream(Duration::from_secs(2)).await
+                        {
+                            warn!(%error, "CI-V scope stream could not be enabled");
+                            capabilities.scope = false;
+                        }
+                    }
+                }
                 send_json(sink, &ServerMessage::RadioCapabilities(capabilities)).await?;
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
@@ -752,6 +794,7 @@ fn radio_capabilities(radio: &dyn Radio) -> RadioCapabilitiesInfo {
             .map(Into::into)
             .collect(),
         tuner: radio.supports_control(ControlId::Tuner),
+        scope: false,
     }
 }
 
@@ -818,7 +861,8 @@ mod tests {
         };
         let first = RadioSelection {
             id: "usb-1".into(),
-            radio: provider.acquire("usb-1", &request).unwrap(),
+            radio: provider.acquire("usb-1", &request).unwrap().radio,
+            civ_scope: None,
             provider: provider.clone(),
         };
         assert!(provider.devices()[0].in_use);
@@ -842,7 +886,10 @@ mod tests {
                     request.driver,
                     RadioDriver::IcomCiv | RadioDriver::YaesuCat
                 ));
-                Ok(Arc::new(rigwright::NullRadio::new()))
+                Ok(RadioSession {
+                    radio: Arc::new(rigwright::NullRadio::new()),
+                    civ_scope: None,
+                })
             }),
         }]);
         let icom_request = RadioOpenRequest {

@@ -65,6 +65,8 @@ pub struct RadioCapabilitiesInfo {
     pub controls: Vec<ControlCapability>,
     pub meters: Vec<WireMeterId>,
     pub tuner: bool,
+    #[serde(default)]
+    pub scope: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -356,6 +358,9 @@ pub enum ServerMessage {
         request_id: Option<String>,
         meter_id: WireMeterId,
         value: Option<u8>,
+    },
+    ScopeFrame {
+        bins: Vec<u8>,
     },
     TunerStatus {
         request_id: Option<String>,

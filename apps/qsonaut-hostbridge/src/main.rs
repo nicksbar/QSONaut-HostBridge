@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use qsonaut_hostbridge::{
     AudioFrame, AudioOutputProvider, AudioSink, AudioSource, ConfiguredRadioProvider, HostBridge,
-    HostConfig, RadioProvider, RadioProviderEntry, StaticAuthorizer,
+    HostConfig, RadioProvider, RadioProviderEntry, RadioSession, StaticAuthorizer,
 };
 use qsonaut_hostbridge_protocol::{
     AudioCodec, AudioFormat, AudioOutputInfo, AudioSourceInfo, AudioSourceKind, Capabilities,
@@ -243,13 +243,18 @@ fn add_radio_entry(entries: &mut Vec<RadioProviderEntry>, file_name: String, pat
                 RadioDriver::YaesuLegacyCat => 4_800,
                 RadioDriver::ElecraftCat => 38_400,
             });
-            Ok(Arc::new(open_model_with_radio_address(
+            let configured = open_model_with_radio_address(
                 model,
                 factory_path.clone(),
                 baud_rate,
                 0xE0,
                 request.radio_address,
-            )?) as Arc<dyn Radio>)
+            )?;
+            let civ_scope = configured.as_icom().cloned().map(Arc::new);
+            Ok(RadioSession {
+                radio: Arc::new(configured) as Arc<dyn Radio>,
+                civ_scope,
+            })
         }),
     });
 }
