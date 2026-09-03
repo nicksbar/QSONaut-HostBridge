@@ -693,13 +693,34 @@ async fn state_message(radio: Option<&RadioSelection>) -> Result<ServerMessage> 
     let Some(radio) = radio else {
         return Ok(ServerMessage::State(RadioState::default()));
     };
+    let mut controls = std::collections::BTreeMap::new();
+    for id in radio.radio.supported_controls() {
+        if radio.radio.supports_control_read(id) {
+            if let Ok(Some(value)) = radio.radio.get_control(id).await {
+                controls.insert(control_id_key(id), value.into());
+            }
+        }
+    }
+    let mut meters = std::collections::BTreeMap::new();
+    for id in radio.radio.supported_meters() {
+        if let Ok(Some(value)) = radio.radio.get_meter(id).await {
+            meters.insert(id.into(), value);
+        }
+    }
+    let tuner = radio
+        .radio
+        .get_tuner_status()
+        .await
+        .ok()
+        .flatten()
+        .map(Into::into);
     Ok(ServerMessage::State(RadioState {
         frequency_hz: radio.radio.get_frequency_hz().await.ok(),
         mode: radio.radio.get_mode().await.ok().map(Into::into),
         ptt: radio.radio.get_ptt().await.ok(),
-        controls: std::collections::BTreeMap::new(),
-        meters: std::collections::BTreeMap::new(),
-        tuner: None,
+        controls,
+        meters,
+        tuner,
     }))
 }
 

@@ -221,7 +221,6 @@ fn add_radio_entry(entries: &mut Vec<RadioProviderEntry>, file_name: String, pat
                 RadioDriver::YaesuLegacyCat => GENERIC_YAESU_CLASSIC_MODEL,
                 RadioDriver::KenwoodCat => GENERIC_KENWOOD_MODEL,
                 RadioDriver::ElecraftCat => anyhow::bail!("Elecraft requires an explicit model"),
-                RadioDriver::Rigctld => anyhow::bail!("rigctld is not a serial HostBridge driver"),
             });
             let model_driver = find_model(model)
                 .map(|profile| match profile.protocol {
@@ -243,7 +242,6 @@ fn add_radio_entry(entries: &mut Vec<RadioProviderEntry>, file_name: String, pat
                 RadioDriver::YaesuCat => 38_400,
                 RadioDriver::YaesuLegacyCat => 4_800,
                 RadioDriver::ElecraftCat => 38_400,
-                RadioDriver::Rigctld => unreachable!(),
             });
             Ok(Arc::new(open_model_with_radio_address(
                 model,

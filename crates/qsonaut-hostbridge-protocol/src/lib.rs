@@ -205,7 +205,6 @@ pub enum RadioDriver {
     YaesuLegacyCat,
     KenwoodCat,
     ElecraftCat,
-    Rigctld,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
