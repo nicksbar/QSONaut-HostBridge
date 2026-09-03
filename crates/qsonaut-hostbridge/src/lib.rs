@@ -625,7 +625,12 @@ impl HostBridge {
                                         std::thread::sleep(std::time::Duration::from_millis(20));
                                     }
                                 }
-                                std::thread::sleep(std::time::Duration::from_millis(10));
+                                // Scope is a visualization stream, not a
+                                // measurement/control path. Keep it well
+                                // below the audio frame rate so the shared
+                                // WebSocket writer cannot be flooded by
+                                // JSON scope rows while PCM remains live.
+                                std::thread::sleep(std::time::Duration::from_millis(100));
                             }
                         })
                         .map_err(|error| {
