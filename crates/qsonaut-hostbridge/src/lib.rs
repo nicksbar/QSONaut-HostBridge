@@ -575,21 +575,14 @@ impl HostBridge {
                     .as_ref()
                     .and_then(|selection| selection.civ_scope.clone())
                     .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?;
-                // Rigwright enables the radio's continuous stream before it
-                // waits for the first complete sweep. A busy CI-V link can
-                // legitimately miss that first read even though the stream
-                // is now live. Mark the service active before the wait so the
-                // polling arm can drain those frames and the client can
-                // recover without restarting HostBridge.
+                // Start only enables the radio's continuous stream. Do not
+                // wait for a first sweep in this request handler: the same
+                // WebSocket must continue forwarding audio and controls while
+                // the scope poller drains unsolicited CI-V frames.
                 if let Some(selection) = selected_radio.as_mut() {
                     selection.scope_active = true;
                 }
-                let bins = scope
-                    .enable_spectrum_stream(Duration::from_millis(2_500))
-                    .await?;
-                if !bins.is_empty() {
-                    send_json(sink, &ServerMessage::ScopeFrame { bins }).await?;
-                }
+                scope.start_spectrum_stream().await?;
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::StopScope { request_id } => {
