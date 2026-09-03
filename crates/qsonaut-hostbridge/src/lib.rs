@@ -367,7 +367,7 @@ impl HostBridge {
                     Some(Ok(Message::Text(text))) => {
                         last_activity = Instant::now();
                         if let Err(error) = self.dispatch(&mut sink, &mut selected_radio, &mut audio_rx, &mut selected_audio_sink, &text).await {
-                            send_json(&mut sink, &ServerMessage::Error { code: "request_failed".into(), message: error.to_string(), request_id: None }).await?;
+                            send_json(&mut sink, &ServerMessage::Error { code: "request_failed".into(), message: error.to_string(), request_id: request_id_from_text(&text) }).await?;
                         }
                     }
                     Some(Ok(Message::Binary(bytes))) => {
@@ -734,6 +734,25 @@ fn radio_capabilities(radio: &dyn Radio) -> RadioCapabilitiesInfo {
     }
 }
 
+fn request_id_from_text(text: &str) -> Option<String> {
+    let message = serde_json::from_str::<ClientMessage>(text).ok()?;
+    match message {
+        ClientMessage::SelectRadio { request_id, .. }
+        | ClientMessage::GetState { request_id }
+        | ClientMessage::GetControl { request_id, .. }
+        | ClientMessage::SetControl { request_id, .. }
+        | ClientMessage::GetMeter { request_id, .. }
+        | ClientMessage::StartTuner { request_id }
+        | ClientMessage::GetTunerStatus { request_id }
+        | ClientMessage::SetFrequency { request_id, .. }
+        | ClientMessage::SetMode { request_id, .. }
+        | ClientMessage::SetPtt { request_id, .. }
+        | ClientMessage::SelectAudio { request_id, .. }
+        | ClientMessage::SelectAudioOutput { request_id, .. } => request_id,
+        ClientMessage::Hello(_) | ClientMessage::Ping { .. } | ClientMessage::Pong { .. } => None,
+    }
+}
+
 async fn send_json<S>(sink: &mut S, message: &ServerMessage) -> Result<()>
 where
     S: SinkExt<Message> + Unpin,
@@ -747,6 +766,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_id_is_preserved_for_dispatch_errors() {
+        let text = serde_json::to_string(&ClientMessage::GetMeter {
+            request_id: Some("meter-42".into()),
+            meter_id: WireMeterId::Signal,
+        })
+        .unwrap();
+        assert_eq!(request_id_from_text(&text).as_deref(), Some("meter-42"));
+        assert_eq!(request_id_from_text("not-json"), None);
+    }
 
     #[test]
     fn radio_reservation_blocks_second_session_until_release() {
