@@ -9,8 +9,16 @@ use qsonaut_hostbridge_protocol::{
     MediaDirection, MediaFrameHeader, RadioDeviceInfo, RadioDriver, RadioTransportKind,
     MEDIA_HEADER_VERSION,
 };
-use rigwright::{drivers::open_model, Radio};
+use rigwright::{
+    drivers::open_model_with_radio_address,
+    models::{
+        find_model, Protocol, GENERIC_ICOM_MODEL, GENERIC_KENWOOD_MODEL,
+        GENERIC_YAESU_CLASSIC_MODEL, GENERIC_YAESU_MODEL,
+    },
+    Radio,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
@@ -190,78 +198,57 @@ fn configured_radios() -> Result<ConfiguredRadioProvider> {
     for device in devices.flatten() {
         let file_name = device.file_name().to_string_lossy().into_owned();
         let path = device.path().to_string_lossy().into_owned();
-        // Never infer a model or driver from a USB descriptor. Advertise each
-        // supported protocol as an explicit candidate and let QSONaut choose.
-        for spec in driver_specs() {
-            add_radio_entry(&mut entries, file_name.clone(), path.clone(), spec);
-        }
+        add_radio_entry(&mut entries, file_name, path);
     }
     Ok(ConfiguredRadioProvider::new(entries))
 }
 
-#[derive(Clone, Copy)]
-struct DriverSpec {
-    suffix: &'static str,
-    driver: RadioDriver,
-    model: &'static str,
-    baud: u32,
-}
-
-fn driver_specs() -> [DriverSpec; 4] {
-    [
-        DriverSpec {
-            suffix: "icom",
-            driver: RadioDriver::IcomCiv,
-            model: "CI-V (generic)",
-            baud: 115_200,
-        },
-        DriverSpec {
-            suffix: "yaesu",
-            driver: RadioDriver::YaesuCat,
-            model: "CAT (generic)",
-            baud: 38_400,
-        },
-        DriverSpec {
-            suffix: "legacy_yaesu",
-            driver: RadioDriver::YaesuLegacyCat,
-            model: "classic CAT (generic)",
-            baud: 4_800,
-        },
-        DriverSpec {
-            suffix: "kenwood",
-            driver: RadioDriver::KenwoodCat,
-            model: "PC control (generic)",
-            baud: 115_200,
-        },
-    ]
-}
-
-fn add_radio_entry(
-    entries: &mut Vec<RadioProviderEntry>,
-    file_name: String,
-    path: String,
-    spec: DriverSpec,
-) {
-    let id = format!("{}:{}", file_name, spec.suffix);
-    let label = format!("{} ({})", file_name, spec.model);
+fn add_radio_entry(entries: &mut Vec<RadioProviderEntry>, file_name: String, path: String) {
+    let id = file_name.clone();
+    let label = file_name.clone();
     let factory_path = path.clone();
-    let factory_model = spec.model.to_owned();
     entries.push(RadioProviderEntry {
         info: RadioDeviceInfo {
             id,
             label,
-            driver: spec.driver,
-            model: Some(spec.model.into()),
             transport: RadioTransportKind::UsbSerial,
             in_use: false,
         },
-        lease_id: path,
-        open: Arc::new(move || {
-            Ok(Arc::new(open_model(
-                &factory_model,
+        open: Arc::new(move |request| {
+            let model = request.model.as_deref().unwrap_or(match request.driver {
+                RadioDriver::IcomCiv => GENERIC_ICOM_MODEL,
+                RadioDriver::YaesuCat => GENERIC_YAESU_MODEL,
+                RadioDriver::YaesuLegacyCat => GENERIC_YAESU_CLASSIC_MODEL,
+                RadioDriver::KenwoodCat => GENERIC_KENWOOD_MODEL,
+                RadioDriver::Rigctld => anyhow::bail!("rigctld is not a serial HostBridge driver"),
+            });
+            let model_driver = find_model(model)
+                .and_then(|profile| match profile.protocol {
+                    Protocol::IcomCiV { .. } => Some(RadioDriver::IcomCiv),
+                    Protocol::YaesuCat => Some(RadioDriver::YaesuCat),
+                    Protocol::YaesuLegacyCat => Some(RadioDriver::YaesuLegacyCat),
+                    Protocol::KenwoodCat => Some(RadioDriver::KenwoodCat),
+                    Protocol::ElecraftCat => None,
+                })
+                .ok_or_else(|| anyhow::anyhow!("unknown HostBridge radio model: {model}"))?;
+            if model_driver != request.driver {
+                anyhow::bail!(
+                    "selected driver {:?} does not match model {model}",
+                    request.driver
+                );
+            }
+            let baud_rate = request.baud_rate.unwrap_or(match request.driver {
+                RadioDriver::IcomCiv | RadioDriver::KenwoodCat => 115_200,
+                RadioDriver::YaesuCat => 38_400,
+                RadioDriver::YaesuLegacyCat => 4_800,
+                RadioDriver::Rigctld => unreachable!(),
+            });
+            Ok(Arc::new(open_model_with_radio_address(
+                model,
                 factory_path.clone(),
-                spec.baud,
+                baud_rate,
                 0xE0,
+                request.radio_address,
             )?) as Arc<dyn Radio>)
         }),
     });
@@ -269,43 +256,59 @@ fn add_radio_entry(
 
 struct AlsaAudioSource {
     sources: Vec<AudioSourceInfo>,
+    devices: HashMap<String, String>,
 }
 
 impl AlsaAudioSource {
     fn new() -> Self {
         let output = Command::new("arecord").arg("-L").output();
+        let mut audio_devices = HashMap::new();
         let sources = output
             .ok()
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
             .into_iter()
-            .flat_map(|devices| {
-                devices
+            .flat_map(|device_list| {
+                device_list
                     .lines()
                     .filter(|line| line.starts_with("hw:CARD="))
-                    .filter_map(|line| {
+                    .map(|line| {
                         let id = line.trim().to_owned();
-                        let channels = alsa_channels(&id)?;
-                        Some(AudioSourceInfo {
-                            id: id.clone(),
-                            label: format!("ALSA {id}"),
+                        // Enumeration must not hide a valid card merely
+                        // because another client currently has it open. The
+                        // subscribe path performs the authoritative open and
+                        // reports a real failure if the card is unavailable.
+                        let channels = alsa_channels("arecord", &id).unwrap_or(2);
+                        let public_id = stable_audio_id("capture", &id);
+                        audio_devices.insert(public_id.clone(), id);
+                        AudioSourceInfo {
+                            id: public_id,
+                            label: audio_label("capture", line),
                             kind: AudioSourceKind::RadioInput,
                             formats: vec![AudioFormat {
                                 codec: AudioCodec::PcmS16Le,
                                 channels,
                                 sample_rate_hz: 48_000,
                             }],
-                        })
+                        }
                     })
                     .collect::<Vec<_>>()
             })
             .collect();
-        Self { sources }
+        Self {
+            sources,
+            devices: audio_devices,
+        }
     }
 }
 
-fn alsa_channels(device: &str) -> Option<u8> {
-    let output = Command::new("arecord")
+fn alsa_channels(command: &str, device: &str) -> Option<u8> {
+    let probe_input = if command == "aplay" {
+        "/dev/zero"
+    } else {
+        "/dev/null"
+    };
+    let output = Command::new(command)
         .args([
             "--dump-hw-params",
             "-D",
@@ -318,7 +321,7 @@ fn alsa_channels(device: &str) -> Option<u8> {
             "1",
             "-d",
             "1",
-            "/dev/null",
+            probe_input,
         ])
         .output()
         .ok()?;
@@ -349,13 +352,19 @@ impl AudioSource for AlsaAudioSource {
         source_id: &str,
         format: &AudioFormat,
     ) -> Result<tokio::sync::broadcast::Receiver<AudioFrame>> {
-        let source = self
+        if !self
             .sources
             .iter()
-            .find(|source| source.id == source_id && source.formats.contains(format))
-            .ok_or_else(|| anyhow::anyhow!("ALSA audio source or format is unavailable"))?;
+            .any(|source| source.id == source_id && source.formats.contains(format))
+        {
+            anyhow::bail!("ALSA audio source or format is unavailable")
+        }
         let (sender, receiver) = tokio::sync::broadcast::channel(8);
-        let device = source.id.clone();
+        let device = self
+            .devices
+            .get(source_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("ALSA audio source is unavailable"))?;
         let channels = format.channels;
         let child = Command::new("arecord")
             .args([
@@ -443,26 +452,30 @@ impl AudioSource for AlsaAudioSource {
 
 struct AlsaAudioOutput {
     outputs: Vec<AudioOutputInfo>,
+    devices: HashMap<String, String>,
 }
 
 impl AlsaAudioOutput {
     fn new() -> Self {
         let output = Command::new("aplay").arg("-L").output();
+        let mut audio_devices = HashMap::new();
         let outputs = output
             .ok()
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
             .into_iter()
-            .flat_map(|devices| {
-                devices
+            .flat_map(|device_list| {
+                device_list
                     .lines()
                     .filter(|line| line.starts_with("hw:CARD="))
                     .filter_map(|line| {
                         let id = line.trim().to_owned();
-                        let channels = alsa_channels(&id)?;
+                        let channels = alsa_channels("aplay", &id)?;
+                        let public_id = stable_audio_id("playback", &id);
+                        audio_devices.insert(public_id.clone(), id);
                         Some(AudioOutputInfo {
-                            id: id.clone(),
-                            label: format!("ALSA {id}"),
+                            id: public_id,
+                            label: audio_label("playback", line),
                             formats: vec![AudioFormat {
                                 codec: AudioCodec::PcmS16Le,
                                 channels,
@@ -473,7 +486,10 @@ impl AlsaAudioOutput {
                     .collect::<Vec<_>>()
             })
             .collect();
-        Self { outputs }
+        Self {
+            outputs,
+            devices: audio_devices,
+        }
     }
 }
 
@@ -505,9 +521,14 @@ impl AudioOutputProvider for AlsaAudioOutput {
         }
         let (sender, receiver) = mpsc::sync_channel::<AudioFrame>(8);
         let channels = format.channels.to_string();
+        let device = self
+            .devices
+            .get(output_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("ALSA audio output is unavailable"))?;
         let mut child = Command::new("aplay")
             .args([
-                "-D", output_id, "-t", "raw", "-f", "S16_LE", "-r", "48000", "-c", &channels,
+                "-D", &device, "-t", "raw", "-f", "S16_LE", "-r", "48000", "-c", &channels,
             ])
             .stdin(Stdio::piped())
             .stderr(Stdio::null())
@@ -532,6 +553,22 @@ fn stable_stream_id(value: &str) -> u32 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish() as u32
+}
+
+fn stable_audio_id(direction: &str, device: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    direction.hash(&mut hasher);
+    device.hash(&mut hasher);
+    format!("alsa-{direction}-{:016x}", hasher.finish())
+}
+
+fn audio_label(direction: &str, descriptor: &str) -> String {
+    let card = descriptor
+        .strip_prefix("hw:CARD=")
+        .and_then(|value| value.split_once(',').map(|(card, _)| card))
+        .unwrap_or("device");
+    format!("ALSA {direction} {card}")
 }
 
 fn service(action: ServiceAction, config_path: &Path) -> Result<()> {
@@ -698,5 +735,20 @@ mod tests {
     fn unit_quotes_paths() {
         let unit = unit_contents(Path::new("/tmp/a path/config.json")).unwrap();
         assert!(unit.contains("\"/tmp/a path/config.json\""));
+    }
+
+    #[test]
+    fn radio_catalog_exposes_physical_devices_without_driver_choice() {
+        let mut entries = Vec::new();
+        add_radio_entry(
+            &mut entries,
+            "usb-serial-1".into(),
+            "/dev/serial/by-id/usb-serial-1".into(),
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].info.id, "usb-serial-1");
+        assert_eq!(entries[0].info.label, "usb-serial-1");
+        assert!(!entries[0].info.id.contains("/dev/"));
+        assert!(!entries[0].info.label.contains("/dev/"));
     }
 }

@@ -86,17 +86,29 @@ pub trait AudioOutputProvider: Send + Sync {
 /// open the selected Rigwright driver without exposing device paths to clients.
 pub trait RadioProvider: Send + Sync {
     fn devices(&self) -> Vec<RadioDeviceInfo>;
-    fn acquire(&self, device_id: &str) -> Result<Arc<dyn Radio>>;
+    fn acquire(&self, device_id: &str, request: &RadioOpenRequest) -> Result<Arc<dyn Radio>>;
     fn release(&self, device_id: &str);
 }
+
+/// Client-selected driver configuration passed to the host adapter. The host
+/// owns the physical path, but never chooses a driver or model on the
+/// client's behalf.
+#[derive(Debug, Clone)]
+pub struct RadioOpenRequest {
+    pub driver: RadioDriver,
+    pub model: Option<String>,
+    pub baud_rate: Option<u32>,
+    pub radio_address: Option<u8>,
+}
+
+pub type RadioFactory = Arc<dyn Fn(&RadioOpenRequest) -> Result<Arc<dyn Radio>> + Send + Sync>;
 
 /// A host-owned catalog entry backed by a lazy Rigwright factory. The factory
 /// is called only after the client has acquired the exclusive lease.
 pub struct RadioProviderEntry {
     pub info: RadioDeviceInfo,
-    /// Multiple driver candidates may refer to one physical serial device.
-    pub lease_id: String,
-    pub open: Arc<dyn Fn() -> Result<Arc<dyn Radio>> + Send + Sync>,
+    /// The physical device ID is the lease key and is never exposed as a path.
+    pub open: RadioFactory,
 }
 
 pub struct ConfiguredRadioProvider {
@@ -122,14 +134,14 @@ impl RadioProvider for ConfiguredRadioProvider {
                 let mut info = entry.info.clone();
                 info.in_use = in_use
                     .as_ref()
-                    .map(|leases| leases.contains(&entry.lease_id))
+                    .map(|leases| leases.contains(&entry.info.id))
                     .unwrap_or(true);
                 info
             })
             .collect()
     }
 
-    fn acquire(&self, device_id: &str) -> Result<Arc<dyn Radio>> {
+    fn acquire(&self, device_id: &str, request: &RadioOpenRequest) -> Result<Arc<dyn Radio>> {
         let entry = self
             .entries
             .iter()
@@ -139,13 +151,13 @@ impl RadioProvider for ConfiguredRadioProvider {
             .in_use
             .lock()
             .map_err(|_| anyhow::anyhow!("radio reservation lock poisoned"))?;
-        if !leases.insert(entry.lease_id.clone()) {
+        if !leases.insert(entry.info.id.clone()) {
             anyhow::bail!("radio device is already in use")
         }
-        match (entry.open)() {
+        match (entry.open)(request) {
             Ok(radio) => Ok(radio),
             Err(error) => {
-                leases.remove(&entry.lease_id);
+                leases.remove(&entry.info.id);
                 Err(error)
             }
         }
@@ -153,9 +165,7 @@ impl RadioProvider for ConfiguredRadioProvider {
 
     fn release(&self, device_id: &str) {
         if let Ok(mut leases) = self.in_use.lock() {
-            if let Some(entry) = self.entries.iter().find(|entry| entry.info.id == device_id) {
-                leases.remove(&entry.lease_id);
-            }
+            leases.remove(device_id);
         }
     }
 }
@@ -183,7 +193,7 @@ impl RadioProvider for FixedRadioProvider {
         vec![device]
     }
 
-    fn acquire(&self, device_id: &str) -> Result<Arc<dyn Radio>> {
+    fn acquire(&self, device_id: &str, _request: &RadioOpenRequest) -> Result<Arc<dyn Radio>> {
         if device_id == self.device.id {
             let mut in_use = self
                 .in_use
@@ -470,13 +480,25 @@ impl HostBridge {
             ClientMessage::SelectRadio {
                 request_id,
                 device_id,
+                driver,
+                model,
+                baud_rate,
+                radio_address,
             } => {
                 if let Some(previous) = selected_radio.take() {
                     if let Err(error) = previous.radio.set_ptt(false).await {
                         warn!(%error, "failed to force PTT off while changing radio selection");
                     }
                 }
-                let radio = self.radios.acquire(&device_id)?;
+                let radio = self.radios.acquire(
+                    &device_id,
+                    &RadioOpenRequest {
+                        driver,
+                        model,
+                        baud_rate,
+                        radio_address,
+                    },
+                )?;
                 *selected_radio = Some(RadioSelection {
                     id: device_id,
                     radio,
@@ -732,58 +754,63 @@ mod tests {
             RadioDeviceInfo {
                 id: "usb-1".into(),
                 label: "USB radio".into(),
-                driver: RadioDriver::IcomCiv,
-                model: Some("IC-7300".into()),
                 transport: RadioTransportKind::UsbSerial,
                 in_use: false,
             },
             Arc::new(rigwright::NullRadio::new()),
         ));
+        let request = RadioOpenRequest {
+            driver: RadioDriver::IcomCiv,
+            model: Some("CI-V (generic)".into()),
+            baud_rate: Some(115_200),
+            radio_address: None,
+        };
         let first = RadioSelection {
             id: "usb-1".into(),
-            radio: provider.acquire("usb-1").unwrap(),
+            radio: provider.acquire("usb-1", &request).unwrap(),
             provider: provider.clone(),
         };
         assert!(provider.devices()[0].in_use);
-        assert!(provider.acquire("usb-1").is_err());
+        assert!(provider.acquire("usb-1", &request).is_err());
         drop(first);
         assert!(!provider.devices()[0].in_use);
-        assert!(provider.acquire("usb-1").is_ok());
+        assert!(provider.acquire("usb-1", &request).is_ok());
     }
 
     #[test]
-    fn driver_candidates_share_the_physical_radio_lease() {
-        let provider = ConfiguredRadioProvider::new(vec![
-            RadioProviderEntry {
-                info: RadioDeviceInfo {
-                    id: "usb-1:icom".into(),
-                    label: "USB radio (Icom CI-V)".into(),
-                    driver: RadioDriver::IcomCiv,
-                    model: Some("CI-V (generic)".into()),
-                    transport: RadioTransportKind::UsbSerial,
-                    in_use: false,
-                },
-                lease_id: "usb-1".into(),
-                open: Arc::new(|| Ok(Arc::new(rigwright::NullRadio::new()))),
+    fn client_driver_choices_share_the_physical_radio_lease() {
+        let provider = ConfiguredRadioProvider::new(vec![RadioProviderEntry {
+            info: RadioDeviceInfo {
+                id: "usb-1".into(),
+                label: "USB radio".into(),
+                transport: RadioTransportKind::UsbSerial,
+                in_use: false,
             },
-            RadioProviderEntry {
-                info: RadioDeviceInfo {
-                    id: "usb-1:yaesu".into(),
-                    label: "USB radio (Yaesu CAT)".into(),
-                    driver: RadioDriver::YaesuCat,
-                    model: Some("CAT (generic)".into()),
-                    transport: RadioTransportKind::UsbSerial,
-                    in_use: false,
-                },
-                lease_id: "usb-1".into(),
-                open: Arc::new(|| Ok(Arc::new(rigwright::NullRadio::new()))),
-            },
-        ]);
-        let first = provider.acquire("usb-1:icom").unwrap();
+            open: Arc::new(|request| {
+                assert!(matches!(
+                    request.driver,
+                    RadioDriver::IcomCiv | RadioDriver::YaesuCat
+                ));
+                Ok(Arc::new(rigwright::NullRadio::new()))
+            }),
+        }]);
+        let icom_request = RadioOpenRequest {
+            driver: RadioDriver::IcomCiv,
+            model: Some("IC-7300".into()),
+            baud_rate: Some(115_200),
+            radio_address: None,
+        };
+        let yaesu_request = RadioOpenRequest {
+            driver: RadioDriver::YaesuCat,
+            model: Some("FTDX10".into()),
+            baud_rate: Some(38_400),
+            radio_address: None,
+        };
+        let first = provider.acquire("usb-1", &icom_request).unwrap();
         assert!(provider.devices().iter().all(|device| device.in_use));
-        assert!(provider.acquire("usb-1:yaesu").is_err());
+        assert!(provider.acquire("usb-1", &yaesu_request).is_err());
         drop(first);
-        provider.release("usb-1:icom");
+        provider.release("usb-1");
         assert!(provider.devices().iter().all(|device| !device.in_use));
     }
 

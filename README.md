@@ -8,8 +8,8 @@ client does not need direct access to the host's serial or audio device paths.
 ## Current framework
 
 - WebSocket control channel with JSON messages.
-- Host-advertised radio catalog with client selection of USB/serial devices and
-  Rigwright driver/profile candidates.
+- Host-advertised physical radio catalog with client selection of USB/serial
+  devices and Rigwright driver/model configuration.
 - Exclusive radio reservations prevent concurrent control of one radio. This
   is session safety, not a permanent hardware lock.
 - Binary PCM media frames with stream IDs, direction, timing, codec, and length.
@@ -119,16 +119,19 @@ USB/audio adapters before it can enumerate and use local hardware.
 
 ## Raspberry Pi hardware adapter
 
-The executable dynamically scans `/dev/serial/by-id` and ALSA at startup. On
-the reference Pi it discovers an IC-7300 USB serial interface using Rigwright's
-`IC-7300` Icom CI-V profile, an mcHF USB serial interface using the
-`FT-817ND`-compatible classic CAT profile, and both radio USB audio inputs as
-48 kHz S16LE.
+The executable dynamically scans `/dev/serial/by-id` and ALSA at startup. Every
+serial device is advertised once as a physical resource. The client selects
+the Rigwright driver, optional model, baud rate, and radio address for that
+resource; HostBridge validates the request and opens the host-private path.
+HostBridge never infers a driver or model from a USB descriptor. A failed open
+is reported to the client; the host does not silently try another driver or
+permanently hide or lock the device. Hot-plug changes are discovered after
+restarting HostBridge.
 
-Unknown serial devices are advertised as selectable generic Icom, modern
-Yaesu, classic Yaesu, and Kenwood driver candidates. A failed candidate open
-is reported to the client; the host does not permanently hide or lock the
-device. Hot-plug changes are discovered after restarting HostBridge.
+ALSA capture and playback cards are advertised dynamically by the station
+user. Enumeration retains cards even when a temporary capability probe cannot
+open one because another process is using it; selecting the card performs the
+authoritative open and reports any real availability or format error.
 
 The same dynamic catalog includes ALSA playback outputs. After the client
 sends `select_audio_output`, HostBridge starts `aplay` for that host-owned

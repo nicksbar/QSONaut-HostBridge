@@ -64,19 +64,28 @@ radio entry contains:
 
 - opaque stable `id` selected by the client;
 - human-readable `label`;
-- Rigwright `driver` and optional `model`;
 - `transport` metadata;
 - current `in_use` state.
 
 The client sends:
 
 ```json
-{ "type": "select_radio", "device_id": "host-advertised-id" }
+{
+  "type": "select_radio",
+  "device_id": "host-advertised-id",
+  "driver": "icom_civ",
+  "model": "IC-7300",
+  "baud_rate": 115200,
+  "radio_address": 148
+}
 ```
 
-The host opens the selected driver lazily after acquiring its exclusive lease.
-A failed open is an error response; it is not permission for the client to
-guess a device path or silently try another radio.
+The driver, optional model, baud rate, and optional radio address are
+client-selected. `CI-V (generic)` and the other protocol-only models are
+valid choices. The host opens the requested configuration lazily after
+acquiring its exclusive lease. A failed open is an error response; it is not
+permission for the client to guess a device path or silently try another
+radio.
 
 After `select_radio`, the host sends `radio_capabilities`. This is the
 authoritative Rigwright surface for that selected device. It includes core
@@ -85,11 +94,11 @@ read/write flags, every typed control with independent `readable` and
 use Rigwright debug names (for example `AfGain`, `RfPower`, and
 `NoiseReduction`) and must be treated as opaque by clients.
 
-`radio_devices` contains explicit driver candidates. A serial device may appear
-more than once, for example as `Icom CI-V` and `Yaesu CAT`; the client selects
-the candidate that matches the operator's chosen driver. HostBridge must not
-infer a driver or model from a USB descriptor, and candidates for one physical
-resource share one exclusive lease. Host paths remain private to the host.
+`radio_devices` contains physical host resources only. HostBridge must not
+infer or choose a driver/model from a USB descriptor. The client owns that
+choice and sends it in `select_radio`; all driver configurations for one
+physical resource share one exclusive lease. Host paths remain private to the
+host.
 
 `capabilities.audio_sources` contains host-owned capture inputs. Each source
 has an opaque `id`, label, kind, and exact supported formats. Select one with:
@@ -247,10 +256,9 @@ keep transmit arming, sequencing, and explicit `set_ptt` safety separate.
 
 ## Reference Pi catalog
 
-The reference Pi at the time of this guide reported USB serial resources with
-multiple explicit generic driver candidates. A host may additionally provide
-model-specific candidates when it has an independently configured model, but
-the client must never assume one from the USB descriptor.
+The reference Pi at the time of this guide reported USB serial resources as
+physical devices. The client then chooses the driver/model configuration for
+that resource; it must never assume one from the USB descriptor.
 
 For example, a serial resource may be advertised as:
 
@@ -267,7 +275,7 @@ examples from one host, not a compile-time device list.
 ## QSONaut implementation checklist
 
 - [ ] Add a HostBridge endpoint configuration and credential storage path.
-- [ ] Connect using WebSocket and send protocol-v2 `hello`.
+- [ ] Connect using WebSocket and send protocol-v3 `hello`.
 - [ ] Render dynamic radio/audio catalogs from `HostHello.capabilities`.
 - [ ] Select radio by advertised ID and handle lease errors.
 - [ ] Select exact audio source and format by advertised ID.

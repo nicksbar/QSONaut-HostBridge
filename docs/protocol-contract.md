@@ -29,8 +29,9 @@ can be added later without changing hardware ownership or control semantics.
 ## Host ownership rules
 
 1. The host enumerates and opens radios and audio devices.
-2. Clients see stable opaque IDs, labels, capabilities, and driver metadata;
-   they never see `/dev` paths, COM names, ALSA names, or other host handles.
+2. Clients see stable opaque IDs and labels, then supply their selected driver
+   configuration; they never see `/dev` paths, COM names, ALSA names, or other
+   host handles.
 3. A client must authenticate before receiving the catalog.
 4. A radio lease is explicit, exclusive, and released on disconnect or lease
    expiry. Selecting a different radio releases the prior lease first.
