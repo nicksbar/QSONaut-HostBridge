@@ -9,7 +9,7 @@ use rigwright::{ControlId, ControlValue, MeterId, Mode, TunerStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 pub const MEDIA_HEADER_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -204,6 +204,7 @@ pub enum RadioDriver {
     YaesuCat,
     YaesuLegacyCat,
     KenwoodCat,
+    ElecraftCat,
     Rigctld,
 }
 

@@ -220,15 +220,16 @@ fn add_radio_entry(entries: &mut Vec<RadioProviderEntry>, file_name: String, pat
                 RadioDriver::YaesuCat => GENERIC_YAESU_MODEL,
                 RadioDriver::YaesuLegacyCat => GENERIC_YAESU_CLASSIC_MODEL,
                 RadioDriver::KenwoodCat => GENERIC_KENWOOD_MODEL,
+                RadioDriver::ElecraftCat => anyhow::bail!("Elecraft requires an explicit model"),
                 RadioDriver::Rigctld => anyhow::bail!("rigctld is not a serial HostBridge driver"),
             });
             let model_driver = find_model(model)
-                .and_then(|profile| match profile.protocol {
-                    Protocol::IcomCiV { .. } => Some(RadioDriver::IcomCiv),
-                    Protocol::YaesuCat => Some(RadioDriver::YaesuCat),
-                    Protocol::YaesuLegacyCat => Some(RadioDriver::YaesuLegacyCat),
-                    Protocol::KenwoodCat => Some(RadioDriver::KenwoodCat),
-                    Protocol::ElecraftCat => None,
+                .map(|profile| match profile.protocol {
+                    Protocol::IcomCiV { .. } => RadioDriver::IcomCiv,
+                    Protocol::YaesuCat => RadioDriver::YaesuCat,
+                    Protocol::YaesuLegacyCat => RadioDriver::YaesuLegacyCat,
+                    Protocol::KenwoodCat => RadioDriver::KenwoodCat,
+                    Protocol::ElecraftCat => RadioDriver::ElecraftCat,
                 })
                 .ok_or_else(|| anyhow::anyhow!("unknown HostBridge radio model: {model}"))?;
             if model_driver != request.driver {
@@ -241,6 +242,7 @@ fn add_radio_entry(entries: &mut Vec<RadioProviderEntry>, file_name: String, pat
                 RadioDriver::IcomCiv | RadioDriver::KenwoodCat => 115_200,
                 RadioDriver::YaesuCat => 38_400,
                 RadioDriver::YaesuLegacyCat => 4_800,
+                RadioDriver::ElecraftCat => 38_400,
                 RadioDriver::Rigctld => unreachable!(),
             });
             Ok(Arc::new(open_model_with_radio_address(
