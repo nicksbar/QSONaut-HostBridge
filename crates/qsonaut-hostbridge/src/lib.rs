@@ -233,6 +233,7 @@ struct RadioSelection {
     id: String,
     radio: Arc<dyn Radio>,
     civ_scope: Option<Arc<IcomCiVRadio>>,
+    scope_active: bool,
     provider: Arc<dyn RadioProvider>,
 }
 
@@ -372,6 +373,7 @@ impl HostBridge {
         let mut selected_radio: Option<RadioSelection> = None;
         let mut heartbeat = time::interval(Duration::from_secs(15));
         let mut scope_poll = time::interval(Duration::from_millis(40));
+        let mut scope_retry = time::interval(Duration::from_secs(1));
         let mut last_activity = Instant::now();
         let mut heartbeat_nonce = 0_u64;
         loop {
@@ -441,6 +443,23 @@ impl HostBridge {
                                 }
                             }
                             Err(error) => warn!(%error, "CI-V scope sweep could not be drained"),
+                        }
+                    }
+                }
+                _ = scope_retry.tick(), if selected_radio.as_ref().is_some_and(|radio| radio.civ_scope.is_some() && !radio.scope_active) => {
+                    let scope = selected_radio.as_ref().and_then(|radio| radio.civ_scope.clone());
+                    if let Some(scope) = scope {
+                        match scope.enable_spectrum_stream(Duration::from_millis(2_500)).await {
+                            Ok(bins) => {
+                                if let Some(selection) = selected_radio.as_mut() {
+                                    selection.scope_active = true;
+                                }
+                                if !bins.is_empty() {
+                                    send_json(&mut sink, &ServerMessage::ScopeFrame { bins }).await?;
+                                }
+                                info!("CI-V scope stream enabled on retry");
+                            }
+                            Err(error) => warn!(%error, "CI-V scope stream retry failed"),
                         }
                     }
                 }
@@ -532,6 +551,7 @@ impl HostBridge {
                     id: device_id,
                     radio,
                     civ_scope: session.civ_scope,
+                    scope_active: false,
                     provider: self.radios.clone(),
                 });
                 let mut capabilities = radio_capabilities(
@@ -547,6 +567,7 @@ impl HostBridge {
                     .is_some_and(|scope| scope.supports_scope());
                 let scope_request_id = request_id.clone();
                 let mut initial_scope = None;
+                let mut scope_active = false;
                 if capabilities.scope {
                     if let Some(scope) = selected_radio
                         .as_ref()
@@ -556,7 +577,10 @@ impl HostBridge {
                         // CI-V frames. Give the radio enough time to deliver
                         // all divisions on a busy serial link.
                         match scope.enable_spectrum_stream(Duration::from_secs(5)).await {
-                            Ok(bins) => initial_scope = Some(bins),
+                            Ok(bins) => {
+                                initial_scope = Some(bins);
+                                scope_active = true;
+                            }
                             Err(error) => {
                                 // Scope is a driver capability even when the
                                 // radio did not complete the first enable
@@ -576,6 +600,9 @@ impl HostBridge {
                             }
                         }
                     }
+                }
+                if let Some(selection) = selected_radio.as_mut() {
+                    selection.scope_active = scope_active;
                 }
                 send_json(sink, &ServerMessage::RadioCapabilities(capabilities)).await?;
                 if let Some(bins) = initial_scope.filter(|bins| !bins.is_empty()) {
@@ -890,6 +917,7 @@ mod tests {
             id: "usb-1".into(),
             radio: provider.acquire("usb-1", &request).unwrap().radio,
             civ_scope: None,
+            scope_active: false,
             provider: provider.clone(),
         };
         assert!(provider.devices()[0].in_use);
