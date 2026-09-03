@@ -15,11 +15,10 @@ The connection carries:
   state, errors, and heartbeats.
 - Binary messages for audio/media frames.
 
-The protocol must not add a raw serial or raw TCP hardware-control mode. That
-would duplicate framing and security work while providing little benefit for
-the expected 48 kHz radio audio rate. A future transport may replace the
-WebSocket implementation behind the same session and message contracts only
-if measured WAN latency or loss justifies it.
+The protocol must not expose a raw serial or raw TCP transport to the client.
+Driver-level raw protocol access, where Rigwright explicitly advertises it, is
+available as a bounded request/response service on the authenticated session;
+the host still owns the physical transport, lease, and driver instance.
 
 For the first production media implementation, one WebSocket connection is
 acceptable. Audio frames must remain small (normally 20–40 ms) so control
@@ -119,12 +118,29 @@ sweeps. The client owns retry and recovery policy; HostBridge only dispatches
 these explicit operations and forwards frames. Model validation remains in
 Rigwright.
 
+## Driver service parity
+
+HostBridge forwards the remaining generic Rigwright services without adding
+client workflow:
+
+```json
+{ "type": "get_link_health", "request_id": "health-1" }
+{ "type": "raw_protocol", "request_id": "raw-1", "frame": [254, 254, 0, 224, 253] }
+```
+
+The replies are `link_health` and `raw_protocol`. Link health preserves the
+driver's optional counters and latency measurements. Raw protocol is only
+accepted after a radio lease is held and is dispatched to Rigwright unchanged;
+the client is responsible for knowing the selected driver's frame contract.
+
 ## Current implementation gap
 
 The current runtime has versioned stream metadata, explicit media direction,
 client-to-host media validation through `AudioSink`, selectable host playback
 outputs through `AudioOutputProvider`, structured request/media errors, bounded
 frame sizes, lag reporting, heartbeat pings, and PTT cleanup on session loss.
+It also exposes client-owned scope lifecycle, tuner status, driver link health,
+and driver-level raw protocol access.
 The Linux executable supplies dynamic Rigwright and ALSA adapters. Actual RF
 transmission remains a separate hardware/operator validation: media delivery
 does not key PTT or claim that a modem/radio chain is configured.
