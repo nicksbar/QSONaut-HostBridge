@@ -35,7 +35,7 @@ The first text message must be:
 ```json
 {
   "type": "hello",
-  "protocol_version": 2,
+  "protocol_version": 6,
   "client_name": "QSONaut",
   "access_key": "station-1",
   "password": "configured-secret"
@@ -47,7 +47,7 @@ The host replies with `hello`:
 ```json
 {
   "type": "hello",
-  "protocol_version": 2,
+  "protocol_version": 6,
   "session_id": "uuid",
   "host_name": "Pi station",
   "capabilities": { }

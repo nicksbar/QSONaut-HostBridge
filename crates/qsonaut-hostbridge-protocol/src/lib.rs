@@ -658,6 +658,33 @@ mod tests {
     }
 
     #[test]
+    fn driver_service_requests_round_trip_with_request_ids_and_binary_payloads() {
+        let raw = ClientMessage::RawProtocol {
+            request_id: Some("raw-1".into()),
+            frame: vec![0xFE, 0xFE, 0x94, 0xE0, 0x03, 0xFD],
+        };
+        let json = serde_json::to_string(&raw).unwrap();
+        assert_eq!(serde_json::from_str::<ClientMessage>(&json).unwrap(), raw);
+
+        let health = ServerMessage::LinkHealth {
+            request_id: Some("health-1".into()),
+            health: WireLinkHealth {
+                commands_started: Some(12),
+                responses_matched: Some(11),
+                response_timeouts: Some(1),
+                consecutive_timeouts: Some(1),
+                avg_response_micros: Some(2_500),
+                frames_dropped: Some(3),
+            },
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ServerMessage>(&json).unwrap(),
+            health
+        );
+    }
+
+    #[test]
     fn audio_header_round_trips() {
         let header = MediaFrameHeader {
             version: MEDIA_HEADER_VERSION,
