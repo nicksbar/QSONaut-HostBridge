@@ -6,7 +6,14 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use qsonaut_hostbridge_protocol::*;
 use rigwright::{ControlId, IcomCiVRadio, MeterId, Mode, Radio};
-use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::broadcast,
@@ -372,7 +379,11 @@ impl HostBridge {
         let mut selected_audio_sink = self.audio_sink.clone();
         let mut selected_radio: Option<RadioSelection> = None;
         let mut heartbeat = time::interval(Duration::from_secs(15));
-        let mut scope_poll = time::interval(Duration::from_millis(40));
+        // Scope draining is blocking CI-V I/O. Keep it off the async session
+        // loop; a bounded channel makes scope visualization lossy by design,
+        // never a source of audio/control backpressure.
+        let (scope_tx, mut scope_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+        let mut scope_stop: Option<Arc<AtomicBool>> = None;
         let mut last_activity = Instant::now();
         let mut heartbeat_nonce = 0_u64;
         loop {
@@ -380,7 +391,7 @@ impl HostBridge {
                 message = source.next() => match message {
                     Some(Ok(Message::Text(text))) => {
                         last_activity = Instant::now();
-                        if let Err(error) = self.dispatch(&mut sink, &mut selected_radio, &mut audio_rx, &mut selected_audio_sink, &text).await {
+                        if let Err(error) = self.dispatch(&mut sink, &mut selected_radio, &mut audio_rx, &mut selected_audio_sink, &scope_tx, &mut scope_stop, &text).await {
                             send_json(&mut sink, &ServerMessage::Error { code: "request_failed".into(), message: error.to_string(), request_id: request_id_from_text(&text) }).await?;
                         }
                     }
@@ -430,22 +441,15 @@ impl HostBridge {
                     heartbeat_nonce = heartbeat_nonce.wrapping_add(1);
                     send_json(&mut sink, &ServerMessage::Ping { nonce: heartbeat_nonce }).await?;
                 }
-                _ = scope_poll.tick(), if selected_radio.as_ref().is_some_and(|radio| radio.scope_active && radio.civ_scope.is_some()) => {
-                    let scope = selected_radio.as_ref().and_then(|radio| radio.civ_scope.clone());
-                    if let Some(scope) = scope {
-                        match scope.drain_scope_waveform_sweeps(Duration::from_millis(25)).await {
-                            Ok(sweeps) => {
-                                for bins in sweeps {
-                                    if !bins.is_empty() {
-                                        send_json(&mut sink, &ServerMessage::ScopeFrame { bins }).await?;
-                                    }
-                                }
-                            }
-                            Err(error) => warn!(%error, "CI-V scope sweep could not be drained"),
-                        }
+                bins = scope_rx.recv() => {
+                    if let Some(bins) = bins {
+                        send_json(&mut sink, &ServerMessage::ScopeFrame { bins }).await?;
                     }
                 }
             }
+        }
+        if let Some(stop) = scope_stop {
+            stop.store(true, Ordering::Relaxed);
         }
         fail_safe_ptt(&mut selected_radio).await;
         Ok(())
@@ -488,6 +492,8 @@ impl HostBridge {
         selected_radio: &mut Option<RadioSelection>,
         audio_rx: &mut Option<broadcast::Receiver<AudioFrame>>,
         selected_audio_sink: &mut Option<Arc<dyn AudioSink>>,
+        scope_tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
+        scope_stop: &mut Option<Arc<AtomicBool>>,
         text: &str,
     ) -> Result<()>
     where
@@ -514,6 +520,9 @@ impl HostBridge {
                 baud_rate,
                 radio_address,
             } => {
+                if let Some(stop) = scope_stop.take() {
+                    stop.store(true, Ordering::Relaxed);
+                }
                 if let Some(previous) = selected_radio.take() {
                     if let Err(error) = previous.radio.set_ptt(false).await {
                         warn!(%error, "failed to force PTT off while changing radio selection");
@@ -583,6 +592,47 @@ impl HostBridge {
                     selection.scope_active = true;
                 }
                 scope.start_spectrum_stream().await?;
+                if scope_stop.is_none() {
+                    let stop = Arc::new(AtomicBool::new(false));
+                    let worker_stop = stop.clone();
+                    let worker_scope = scope.clone();
+                    let worker_tx = scope_tx.clone();
+                    std::thread::Builder::new()
+                        .name("qsonaut-hostbridge-scope".to_string())
+                        .spawn(move || {
+                            let runtime = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                                .expect("HostBridge scope runtime");
+                            while !worker_stop.load(Ordering::Relaxed) {
+                                match runtime.block_on(
+                                    worker_scope
+                                        .drain_scope_waveform_sweeps(Duration::from_millis(10)),
+                                ) {
+                                    Ok(sweeps) => {
+                                        if let Some(bins) =
+                                            sweeps.into_iter().rev().find(|bins| !bins.is_empty())
+                                        {
+                                            // A full channel means the async
+                                            // writer is behind. Drop this
+                                            // visualization frame rather than
+                                            // delaying audio or controls.
+                                            let _ = worker_tx.try_send(bins);
+                                        }
+                                    }
+                                    Err(error) => {
+                                        warn!(%error, "CI-V scope worker read failed");
+                                        std::thread::sleep(std::time::Duration::from_millis(20));
+                                    }
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                        })
+                        .map_err(|error| {
+                            anyhow::anyhow!("failed to start scope worker: {error}")
+                        })?;
+                    *scope_stop = Some(stop);
+                }
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::StopScope { request_id } => {
@@ -590,6 +640,9 @@ impl HostBridge {
                     .as_ref()
                     .and_then(|selection| selection.civ_scope.clone())
                     .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?;
+                if let Some(stop) = scope_stop.take() {
+                    stop.store(true, Ordering::Relaxed);
+                }
                 scope.disable_spectrum_stream().await?;
                 if let Some(selection) = selected_radio.as_mut() {
                     selection.scope_active = false;
@@ -800,20 +853,10 @@ async fn state_message(radio: Option<&RadioSelection>) -> Result<ServerMessage> 
     let Some(radio) = radio else {
         return Ok(ServerMessage::State(RadioState::default()));
     };
-    let mut controls = std::collections::BTreeMap::new();
-    for id in radio.radio.supported_controls() {
-        if radio.radio.supports_control_read(id) {
-            if let Ok(Some(value)) = radio.radio.get_control(id).await {
-                controls.insert(control_id_key(id), value.into());
-            }
-        }
-    }
-    let mut meters = std::collections::BTreeMap::new();
-    for id in radio.radio.supported_meters() {
-        if let Ok(Some(value)) = radio.radio.get_meter(id).await {
-            meters.insert(id.into(), value);
-        }
-    }
+    // State snapshots are delivered on the WebSocket command path. Do not
+    // turn one GetState into a serial sweep of every CI-V control and meter:
+    // those reads can take seconds and starve audio/scope delivery. Clients
+    // use the advertised capabilities and independent reads for those values.
     let tuner = radio
         .radio
         .get_tuner_status()
@@ -825,8 +868,8 @@ async fn state_message(radio: Option<&RadioSelection>) -> Result<ServerMessage> 
         frequency_hz: radio.radio.get_frequency_hz().await.ok(),
         mode: radio.radio.get_mode().await.ok().map(Into::into),
         ptt: radio.radio.get_ptt().await.ok(),
-        controls,
-        meters,
+        controls: std::collections::BTreeMap::new(),
+        meters: std::collections::BTreeMap::new(),
         tuner,
     }))
 }
