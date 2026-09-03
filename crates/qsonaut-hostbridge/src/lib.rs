@@ -719,6 +719,31 @@ impl HostBridge {
                     .map(Into::into);
                 send_json(sink, &ServerMessage::TunerStatus { request_id, status }).await?;
             }
+            ClientMessage::GetLinkHealth { request_id } => {
+                let health = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .link_health()
+                    .into();
+                send_json(sink, &ServerMessage::LinkHealth { request_id, health }).await?;
+            }
+            ClientMessage::RawProtocol { request_id, frame } => {
+                let response = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .protocol_write_read(&frame)
+                    .await?;
+                send_json(
+                    sink,
+                    &ServerMessage::RawProtocol {
+                        request_id,
+                        response,
+                    },
+                )
+                .await?;
+            }
             ClientMessage::SelectAudio {
                 request_id,
                 enabled,
@@ -858,6 +883,8 @@ fn request_id_from_text(text: &str) -> Option<String> {
         | ClientMessage::GetMeter { request_id, .. }
         | ClientMessage::StartTuner { request_id }
         | ClientMessage::GetTunerStatus { request_id }
+        | ClientMessage::GetLinkHealth { request_id }
+        | ClientMessage::RawProtocol { request_id, .. }
         | ClientMessage::SetFrequency { request_id, .. }
         | ClientMessage::SetMode { request_id, .. }
         | ClientMessage::SetPtt { request_id, .. }

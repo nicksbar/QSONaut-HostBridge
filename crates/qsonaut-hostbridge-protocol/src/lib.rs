@@ -5,11 +5,11 @@
 //! endian PCM samples. This keeps the hot path compact and leaves room for a
 //! future Opus/codec negotiation without changing radio control messages.
 
-use rigwright::{ControlId, ControlValue, MeterId, Mode, TunerStatus};
+use rigwright::{ControlId, ControlValue, LinkHealth, MeterId, Mode, TunerStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 pub const MEDIA_HEADER_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,6 +181,45 @@ pub struct WireTunerStatus {
     pub tuning: bool,
 }
 
+/// Transport counters projected from the selected Rigwright driver.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WireLinkHealth {
+    pub commands_started: Option<u64>,
+    pub responses_matched: Option<u64>,
+    pub response_timeouts: Option<u64>,
+    pub consecutive_timeouts: Option<u32>,
+    pub avg_response_micros: Option<u64>,
+    pub frames_dropped: Option<u64>,
+}
+
+impl From<LinkHealth> for WireLinkHealth {
+    fn from(health: LinkHealth) -> Self {
+        Self {
+            commands_started: health.commands_started,
+            responses_matched: health.responses_matched,
+            response_timeouts: health.response_timeouts,
+            consecutive_timeouts: health.consecutive_timeouts,
+            avg_response_micros: health.avg_response.map(|value| value.as_micros() as u64),
+            frames_dropped: health.frames_dropped,
+        }
+    }
+}
+
+impl From<WireLinkHealth> for LinkHealth {
+    fn from(health: WireLinkHealth) -> Self {
+        Self {
+            commands_started: health.commands_started,
+            responses_matched: health.responses_matched,
+            response_timeouts: health.response_timeouts,
+            consecutive_timeouts: health.consecutive_timeouts,
+            avg_response: health
+                .avg_response_micros
+                .map(std::time::Duration::from_micros),
+            frames_dropped: health.frames_dropped,
+        }
+    }
+}
+
 /// Client-owned native scope configuration. `None` leaves that setting
 /// unchanged so the client can apply only the operator changes it owns.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -330,6 +369,15 @@ pub enum ClientMessage {
         #[serde(default)]
         request_id: Option<String>,
     },
+    GetLinkHealth {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
+    RawProtocol {
+        #[serde(default)]
+        request_id: Option<String>,
+        frame: Vec<u8>,
+    },
     SetFrequency {
         #[serde(default)]
         request_id: Option<String>,
@@ -392,6 +440,14 @@ pub enum ServerMessage {
     TunerStatus {
         request_id: Option<String>,
         status: Option<WireTunerStatus>,
+    },
+    LinkHealth {
+        request_id: Option<String>,
+        health: WireLinkHealth,
+    },
+    RawProtocol {
+        request_id: Option<String>,
+        response: Vec<u8>,
     },
     Ack {
         request_id: Option<String>,
