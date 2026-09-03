@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Preserve Rigwright scope capability when the initial CI-V enable handshake
-  fails, forward the initial sweep, and report scope/drain errors to clients.
+- Keep scope lifecycle and configuration in clients; HostBridge only advertises
+  the selected driver's scope capability and forwards scope frames.
 
 ## [0.1.0] - 2026-09-01
 
