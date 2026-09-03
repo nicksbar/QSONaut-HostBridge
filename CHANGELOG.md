@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Preserve Rigwright scope capability when the initial CI-V enable handshake
+  fails, forward the initial sweep, and report scope/drain errors to clients.
+
 ## [0.1.0] - 2026-09-01
 
 - Initial authenticated HostBridge protocol and runtime scaffold.

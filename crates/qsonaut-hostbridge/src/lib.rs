@@ -432,10 +432,15 @@ impl HostBridge {
                 _ = scope_poll.tick(), if selected_radio.as_ref().and_then(|radio| radio.civ_scope.as_ref()).is_some() => {
                     let scope = selected_radio.as_ref().and_then(|radio| radio.civ_scope.clone());
                     if let Some(scope) = scope {
-                        for bins in scope.drain_scope_waveform_sweeps(Duration::from_millis(25)).await.unwrap_or_default() {
-                            if !bins.is_empty() {
-                                send_json(&mut sink, &ServerMessage::ScopeFrame { bins }).await?;
+                        match scope.drain_scope_waveform_sweeps(Duration::from_millis(25)).await {
+                            Ok(sweeps) => {
+                                for bins in sweeps {
+                                    if !bins.is_empty() {
+                                        send_json(&mut sink, &ServerMessage::ScopeFrame { bins }).await?;
+                                    }
+                                }
                             }
+                            Err(error) => warn!(%error, "CI-V scope sweep could not be drained"),
                         }
                     }
                 }
@@ -540,20 +545,39 @@ impl HostBridge {
                     .as_ref()
                     .and_then(|selection| selection.civ_scope.as_ref())
                     .is_some_and(|scope| scope.supports_scope());
+                let scope_request_id = request_id.clone();
+                let mut initial_scope = None;
                 if capabilities.scope {
                     if let Some(scope) = selected_radio
                         .as_ref()
                         .and_then(|selection| selection.civ_scope.clone())
                     {
-                        if let Err(error) =
-                            scope.enable_spectrum_stream(Duration::from_secs(2)).await
-                        {
-                            warn!(%error, "CI-V scope stream could not be enabled");
-                            capabilities.scope = false;
+                        match scope.enable_spectrum_stream(Duration::from_secs(2)).await {
+                            Ok(bins) => initial_scope = Some(bins),
+                            Err(error) => {
+                                // Scope is a driver capability even when the
+                                // radio did not complete the first enable
+                                // handshake. Keep advertising it so the
+                                // client can present the capability and the
+                                // poller can consume later unsolicited sweeps.
+                                warn!(%error, "CI-V scope stream could not be enabled");
+                                send_json(
+                                    sink,
+                                    &ServerMessage::Error {
+                                        code: "scope_enable_failed".into(),
+                                        message: error.to_string(),
+                                        request_id: scope_request_id,
+                                    },
+                                )
+                                .await?;
+                            }
                         }
                     }
                 }
                 send_json(sink, &ServerMessage::RadioCapabilities(capabilities)).await?;
+                if let Some(bins) = initial_scope.filter(|bins| !bins.is_empty()) {
+                    send_json(sink, &ServerMessage::ScopeFrame { bins }).await?;
+                }
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::GetState { request_id: _ } => {
