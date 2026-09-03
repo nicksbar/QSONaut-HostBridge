@@ -552,7 +552,10 @@ impl HostBridge {
                         .as_ref()
                         .and_then(|selection| selection.civ_scope.clone())
                     {
-                        match scope.enable_spectrum_stream(Duration::from_secs(2)).await {
+                        // A complete IC-7300 sweep is split into multiple
+                        // CI-V frames. Give the radio enough time to deliver
+                        // all divisions on a busy serial link.
+                        match scope.enable_spectrum_stream(Duration::from_secs(5)).await {
                             Ok(bins) => initial_scope = Some(bins),
                             Err(error) => {
                                 // Scope is a driver capability even when the
