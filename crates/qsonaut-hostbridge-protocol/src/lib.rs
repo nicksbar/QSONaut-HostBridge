@@ -566,6 +566,42 @@ mod tests {
     }
 
     #[test]
+    fn scope_lifecycle_round_trip_preserves_optional_configuration() {
+        let message = ClientMessage::ConfigureScope {
+            request_id: Some("scope-config-1".into()),
+            config: ScopeConfiguration {
+                span_hz: Some(500_000),
+                fixed_edges_hz: Some((14_000_000, 14_200_000)),
+                fixed_edge_number: Some(4),
+                hold: Some(false),
+                reference_level_tenths_db: Some(-55),
+                sweep_speed: Some(2),
+                center_mode: Some(true),
+                vbw_wide: Some(true),
+            },
+        };
+        let json = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ClientMessage>(&json).unwrap(),
+            message
+        );
+        for message in [
+            ClientMessage::StartScope {
+                request_id: Some("scope-start-1".into()),
+            },
+            ClientMessage::StopScope {
+                request_id: Some("scope-stop-1".into()),
+            },
+        ] {
+            let json = serde_json::to_string(&message).unwrap();
+            assert_eq!(
+                serde_json::from_str::<ClientMessage>(&json).unwrap(),
+                message
+            );
+        }
+    }
+
+    #[test]
     fn audio_header_round_trips() {
         let header = MediaFrameHeader {
             version: MEDIA_HEADER_VERSION,

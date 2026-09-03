@@ -883,6 +883,21 @@ mod tests {
         })
         .unwrap();
         assert_eq!(request_id_from_text(&text).as_deref(), Some("meter-42"));
+        for message in [
+            ClientMessage::ConfigureScope {
+                request_id: Some("scope-config".into()),
+                config: ScopeConfiguration::default(),
+            },
+            ClientMessage::StartScope {
+                request_id: Some("scope-start".into()),
+            },
+            ClientMessage::StopScope {
+                request_id: Some("scope-stop".into()),
+            },
+        ] {
+            let text = serde_json::to_string(&message).unwrap();
+            assert!(request_id_from_text(&text).is_some());
+        }
         assert_eq!(request_id_from_text("not-json"), None);
     }
 
