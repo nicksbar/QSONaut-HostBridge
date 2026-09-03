@@ -4,6 +4,7 @@
 
 - Keep scope lifecycle and configuration in clients; HostBridge only advertises
   the selected driver's scope capability and forwards scope frames.
+- Add explicit client-owned scope configuration, start, and stop operations.
 
 ## [0.1.0] - 2026-09-01
 

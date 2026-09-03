@@ -233,6 +233,7 @@ struct RadioSelection {
     id: String,
     radio: Arc<dyn Radio>,
     civ_scope: Option<Arc<IcomCiVRadio>>,
+    scope_active: bool,
     provider: Arc<dyn RadioProvider>,
 }
 
@@ -429,7 +430,7 @@ impl HostBridge {
                     heartbeat_nonce = heartbeat_nonce.wrapping_add(1);
                     send_json(&mut sink, &ServerMessage::Ping { nonce: heartbeat_nonce }).await?;
                 }
-                _ = scope_poll.tick(), if selected_radio.as_ref().and_then(|radio| radio.civ_scope.as_ref()).is_some() => {
+                _ = scope_poll.tick(), if selected_radio.as_ref().is_some_and(|radio| radio.scope_active && radio.civ_scope.is_some()) => {
                     let scope = selected_radio.as_ref().and_then(|radio| radio.civ_scope.clone());
                     if let Some(scope) = scope {
                         match scope.drain_scope_waveform_sweeps(Duration::from_millis(25)).await {
@@ -536,6 +537,7 @@ impl HostBridge {
                     id: device_id,
                     radio,
                     civ_scope: session.civ_scope,
+                    scope_active: false,
                     provider: self.radios.clone(),
                 });
                 let mut capabilities = radio_capabilities(
@@ -547,6 +549,52 @@ impl HostBridge {
                 );
                 capabilities.scope = scope_supported;
                 send_json(sink, &ServerMessage::RadioCapabilities(capabilities)).await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::ConfigureScope { request_id, config } => {
+                let scope = selected_radio
+                    .as_ref()
+                    .and_then(|selection| selection.civ_scope.clone())
+                    .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?;
+                scope
+                    .set_scope_configuration(rigwright::icom::civ_radio::ScopeConfiguration {
+                        span_hz: config.span_hz,
+                        fixed_edges_hz: config.fixed_edges_hz,
+                        fixed_edge_number: config.fixed_edge_number,
+                        hold: config.hold,
+                        reference_level_tenths_db: config.reference_level_tenths_db,
+                        sweep_speed: config.sweep_speed,
+                        center_mode: config.center_mode,
+                        vbw_wide: config.vbw_wide,
+                    })
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::StartScope { request_id } => {
+                let scope = selected_radio
+                    .as_ref()
+                    .and_then(|selection| selection.civ_scope.clone())
+                    .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?;
+                let bins = scope
+                    .enable_spectrum_stream(Duration::from_millis(2_500))
+                    .await?;
+                if let Some(selection) = selected_radio.as_mut() {
+                    selection.scope_active = true;
+                }
+                if !bins.is_empty() {
+                    send_json(sink, &ServerMessage::ScopeFrame { bins }).await?;
+                }
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::StopScope { request_id } => {
+                let scope = selected_radio
+                    .as_ref()
+                    .and_then(|selection| selection.civ_scope.clone())
+                    .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?;
+                scope.disable_spectrum_stream().await?;
+                if let Some(selection) = selected_radio.as_mut() {
+                    selection.scope_active = false;
+                }
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::GetState { request_id: _ } => {
@@ -795,6 +843,9 @@ fn request_id_from_text(text: &str) -> Option<String> {
     let message = serde_json::from_str::<ClientMessage>(text).ok()?;
     match message {
         ClientMessage::SelectRadio { request_id, .. }
+        | ClientMessage::ConfigureScope { request_id, .. }
+        | ClientMessage::StartScope { request_id }
+        | ClientMessage::StopScope { request_id }
         | ClientMessage::GetState { request_id }
         | ClientMessage::GetControl { request_id, .. }
         | ClientMessage::SetControl { request_id, .. }
@@ -856,6 +907,7 @@ mod tests {
             id: "usb-1".into(),
             radio: provider.acquire("usb-1", &request).unwrap().radio,
             civ_scope: None,
+            scope_active: false,
             provider: provider.clone(),
         };
         assert!(provider.devices()[0].in_use);

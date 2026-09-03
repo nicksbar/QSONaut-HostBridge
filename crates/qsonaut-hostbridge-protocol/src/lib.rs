@@ -9,7 +9,7 @@ use rigwright::{ControlId, ControlValue, MeterId, Mode, TunerStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 pub const MEDIA_HEADER_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,6 +181,20 @@ pub struct WireTunerStatus {
     pub tuning: bool,
 }
 
+/// Client-owned native scope configuration. `None` leaves that setting
+/// unchanged so the client can apply only the operator changes it owns.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ScopeConfiguration {
+    pub span_hz: Option<u64>,
+    pub fixed_edges_hz: Option<(u64, u64)>,
+    pub fixed_edge_number: Option<u8>,
+    pub hold: Option<bool>,
+    pub reference_level_tenths_db: Option<i16>,
+    pub sweep_speed: Option<u8>,
+    pub center_mode: Option<bool>,
+    pub vbw_wide: Option<bool>,
+}
+
 impl From<TunerStatus> for WireTunerStatus {
     fn from(status: TunerStatus) -> Self {
         Self {
@@ -274,6 +288,19 @@ pub enum ClientMessage {
         baud_rate: Option<u32>,
         #[serde(default)]
         radio_address: Option<u8>,
+    },
+    ConfigureScope {
+        #[serde(default)]
+        request_id: Option<String>,
+        config: ScopeConfiguration,
+    },
+    StartScope {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
+    StopScope {
+        #[serde(default)]
+        request_id: Option<String>,
     },
     GetState {
         #[serde(default)]

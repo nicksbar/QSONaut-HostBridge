@@ -89,6 +89,36 @@ available on both sides.
 5. Bidirectional media is a separate capability. Host-to-client receive audio
    does not imply client-to-host transmit audio.
 
+## Driver-owned scope services
+
+Scope lifecycle belongs to the client. Selecting a radio only advertises the
+driver's scope capability; it does not configure or start a scope stream.
+Clients that receive a scope-capable radio may apply settings and control the
+stream explicitly:
+
+```json
+{
+  "type": "configure_scope",
+  "request_id": "scope-config-1",
+  "config": {
+    "center_mode": true,
+    "span_hz": 500000,
+    "hold": false,
+    "reference_level_tenths_db": 0,
+    "sweep_speed": 1,
+    "vbw_wide": false
+  }
+}
+{ "type": "start_scope", "request_id": "scope-start-1" }
+{ "type": "stop_scope", "request_id": "scope-stop-1" }
+```
+
+`start_scope` returns an acknowledgement and may be followed by an initial
+`scope_frame`. Subsequent `scope_frame` messages contain complete driver
+sweeps. The client owns retry and recovery policy; HostBridge only dispatches
+these explicit operations and forwards frames. Model validation remains in
+Rigwright.
+
 ## Current implementation gap
 
 The current runtime has versioned stream metadata, explicit media direction,
