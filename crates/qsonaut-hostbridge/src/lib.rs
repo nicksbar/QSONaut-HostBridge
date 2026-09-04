@@ -486,6 +486,7 @@ impl HostBridge {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn dispatch<S>(
         &self,
         sink: &mut S,
