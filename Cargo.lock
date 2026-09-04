@@ -674,7 +674,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rigwright"
 version = "0.1.22"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=bd936d3c8ea0d72f6f69367470347c4fc193e5c6#bd936d3c8ea0d72f6f69367470347c4fc193e5c6"
+source = "git+https://github.com/nicksbar/rigwright.git?rev=fa93571a016a00575fa592c227fd7478d29be7ca#fa93571a016a00575fa592c227fd7478d29be7ca"
 dependencies = [
  "anyhow",
  "async-trait",

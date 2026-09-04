@@ -567,7 +567,7 @@ impl HostBridge {
                     .and_then(|selection| selection.civ_scope.clone())
                     .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?;
                 scope
-                    .set_scope_configuration(rigwright::icom::civ_radio::ScopeConfiguration {
+                    .set_scope_configuration(rigwright::ScopeConfiguration {
                         span_hz: config.span_hz,
                         fixed_edges_hz: config.fixed_edges_hz,
                         fixed_edge_number: config.fixed_edge_number,
