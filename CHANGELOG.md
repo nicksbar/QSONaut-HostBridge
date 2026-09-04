@@ -7,7 +7,7 @@
 - Add explicit client-owned scope configuration, start, and stop operations.
 - Expose tuner status, driver link-health counters, and bounded raw driver
   protocol requests through the authenticated session.
-- Pin Rigwright 0.1.21, including resilient IC-7300 unsolicited scope start.
+- Pin Rigwright 0.1.22, including model-aware native startup probing.
 
 ## [0.1.0] - 2026-09-01
 
