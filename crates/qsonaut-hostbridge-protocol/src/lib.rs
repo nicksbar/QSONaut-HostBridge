@@ -5,7 +5,10 @@
 //! endian PCM samples. This keeps the hot path compact and leaves room for a
 //! future Opus/codec negotiation without changing radio control messages.
 
-use rigwright::{ControlId, ControlValue, LinkHealth, MeterId, Mode, TunerStatus};
+use rigwright::{
+    ControlId, ControlValue, LinkHealth, MeterId, Mode, ScopeCenterType, ScopeColor,
+    ScopeMarkerPosition, ScopeMaxHold, ScopeWaveformType, TunerStatus,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -232,6 +235,180 @@ pub struct ScopeConfiguration {
     pub sweep_speed: Option<u8>,
     pub center_mode: Option<bool>,
     pub vbw_wide: Option<bool>,
+    pub center_type: Option<WireScopeCenterType>,
+    pub tx_display: Option<bool>,
+    pub max_hold: Option<WireScopeMaxHold>,
+    pub marker_position: Option<WireScopeMarkerPosition>,
+    pub averaging: Option<u8>,
+    pub waveform_type: Option<WireScopeWaveformType>,
+    pub waterfall_display: Option<bool>,
+    pub waterfall_size: Option<u8>,
+    pub waterfall_peak_level: Option<u8>,
+    pub marker_auto_hide: Option<bool>,
+    pub waveform_color_current: Option<WireScopeColor>,
+    pub waveform_color_line: Option<WireScopeColor>,
+    pub waveform_color_max_hold: Option<WireScopeColor>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WireScopeColor {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+}
+
+impl From<WireScopeColor> for ScopeColor {
+    fn from(value: WireScopeColor) -> Self {
+        Self {
+            red: value.red,
+            green: value.green,
+            blue: value.blue,
+        }
+    }
+}
+
+impl From<ScopeColor> for WireScopeColor {
+    fn from(value: ScopeColor) -> Self {
+        Self {
+            red: value.red,
+            green: value.green,
+            blue: value.blue,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireScopeCenterType {
+    FilterCenter,
+    CarrierPoint,
+    CarrierPointAbsolute,
+}
+
+impl From<WireScopeCenterType> for ScopeCenterType {
+    fn from(value: WireScopeCenterType) -> Self {
+        match value {
+            WireScopeCenterType::FilterCenter => Self::FilterCenter,
+            WireScopeCenterType::CarrierPoint => Self::CarrierPoint,
+            WireScopeCenterType::CarrierPointAbsolute => Self::CarrierPointAbsolute,
+        }
+    }
+}
+
+impl From<ScopeCenterType> for WireScopeCenterType {
+    fn from(value: ScopeCenterType) -> Self {
+        match value {
+            ScopeCenterType::FilterCenter => Self::FilterCenter,
+            ScopeCenterType::CarrierPoint => Self::CarrierPoint,
+            ScopeCenterType::CarrierPointAbsolute => Self::CarrierPointAbsolute,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireScopeMaxHold {
+    Off,
+    TenSeconds,
+    Continuous,
+}
+
+impl From<WireScopeMaxHold> for ScopeMaxHold {
+    fn from(value: WireScopeMaxHold) -> Self {
+        match value {
+            WireScopeMaxHold::Off => Self::Off,
+            WireScopeMaxHold::TenSeconds => Self::TenSeconds,
+            WireScopeMaxHold::Continuous => Self::Continuous,
+        }
+    }
+}
+
+impl From<ScopeMaxHold> for WireScopeMaxHold {
+    fn from(value: ScopeMaxHold) -> Self {
+        match value {
+            ScopeMaxHold::Off => Self::Off,
+            ScopeMaxHold::TenSeconds => Self::TenSeconds,
+            ScopeMaxHold::Continuous => Self::Continuous,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireScopeMarkerPosition {
+    FilterCenter,
+    CarrierPoint,
+}
+
+impl From<WireScopeMarkerPosition> for ScopeMarkerPosition {
+    fn from(value: WireScopeMarkerPosition) -> Self {
+        match value {
+            WireScopeMarkerPosition::FilterCenter => Self::FilterCenter,
+            WireScopeMarkerPosition::CarrierPoint => Self::CarrierPoint,
+        }
+    }
+}
+
+impl From<ScopeMarkerPosition> for WireScopeMarkerPosition {
+    fn from(value: ScopeMarkerPosition) -> Self {
+        match value {
+            ScopeMarkerPosition::FilterCenter => Self::FilterCenter,
+            ScopeMarkerPosition::CarrierPoint => Self::CarrierPoint,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireScopeWaveformType {
+    Fill,
+    FillAndLine,
+}
+
+impl From<WireScopeWaveformType> for ScopeWaveformType {
+    fn from(value: WireScopeWaveformType) -> Self {
+        match value {
+            WireScopeWaveformType::Fill => Self::Fill,
+            WireScopeWaveformType::FillAndLine => Self::FillAndLine,
+        }
+    }
+}
+
+impl From<ScopeWaveformType> for WireScopeWaveformType {
+    fn from(value: ScopeWaveformType) -> Self {
+        match value {
+            ScopeWaveformType::Fill => Self::Fill,
+            ScopeWaveformType::FillAndLine => Self::FillAndLine,
+        }
+    }
+}
+
+impl From<ScopeConfiguration> for rigwright::ScopeConfiguration {
+    fn from(config: ScopeConfiguration) -> Self {
+        Self {
+            span_hz: config.span_hz,
+            fixed_edges_hz: config.fixed_edges_hz,
+            fixed_edge_number: config.fixed_edge_number,
+            hold: config.hold,
+            reference_level_tenths_db: config.reference_level_tenths_db,
+            sweep_speed: config.sweep_speed,
+            center_mode: config.center_mode,
+            vbw_wide: config.vbw_wide,
+            center_type: config.center_type.map(Into::into),
+            tx_display: config.tx_display,
+            max_hold: config.max_hold.map(Into::into),
+            marker_position: config.marker_position.map(Into::into),
+            averaging: config.averaging,
+            waveform_type: config.waveform_type.map(Into::into),
+            waterfall_display: config.waterfall_display,
+            waterfall_size: config.waterfall_size,
+            waterfall_peak_level: config.waterfall_peak_level,
+            marker_auto_hide: config.marker_auto_hide,
+            waveform_color_current: config.waveform_color_current.map(Into::into),
+            waveform_color_line: config.waveform_color_line.map(Into::into),
+            waveform_color_max_hold: config.waveform_color_max_hold.map(Into::into),
+        }
+    }
 }
 
 impl From<TunerStatus> for WireTunerStatus {
@@ -623,19 +800,64 @@ mod tests {
 
     #[test]
     fn scope_lifecycle_round_trip_preserves_optional_configuration() {
+        let config = ScopeConfiguration {
+            span_hz: Some(500_000),
+            fixed_edges_hz: Some((14_000_000, 14_200_000)),
+            fixed_edge_number: Some(4),
+            hold: Some(false),
+            reference_level_tenths_db: Some(-55),
+            sweep_speed: Some(2),
+            center_mode: Some(true),
+            vbw_wide: Some(true),
+            center_type: Some(WireScopeCenterType::CarrierPoint),
+            tx_display: Some(true),
+            max_hold: Some(WireScopeMaxHold::Continuous),
+            marker_position: Some(WireScopeMarkerPosition::CarrierPoint),
+            averaging: Some(2),
+            waveform_type: Some(WireScopeWaveformType::FillAndLine),
+            waterfall_display: Some(true),
+            waterfall_size: Some(2),
+            waterfall_peak_level: Some(4),
+            marker_auto_hide: Some(false),
+            waveform_color_current: Some(WireScopeColor {
+                red: 1,
+                green: 2,
+                blue: 3,
+            }),
+            waveform_color_line: Some(WireScopeColor {
+                red: 4,
+                green: 5,
+                blue: 6,
+            }),
+            waveform_color_max_hold: Some(WireScopeColor {
+                red: 7,
+                green: 8,
+                blue: 9,
+            }),
+        };
         let message = ClientMessage::ConfigureScope {
             request_id: Some("scope-config-1".into()),
-            config: ScopeConfiguration {
-                span_hz: Some(500_000),
-                fixed_edges_hz: Some((14_000_000, 14_200_000)),
-                fixed_edge_number: Some(4),
-                hold: Some(false),
-                reference_level_tenths_db: Some(-55),
-                sweep_speed: Some(2),
-                center_mode: Some(true),
-                vbw_wide: Some(true),
-            },
+            config,
         };
+        let converted = rigwright::ScopeConfiguration::from(config);
+        assert_eq!(converted.center_type, Some(ScopeCenterType::CarrierPoint));
+        assert_eq!(converted.max_hold, Some(ScopeMaxHold::Continuous));
+        assert_eq!(
+            converted.marker_position,
+            Some(ScopeMarkerPosition::CarrierPoint)
+        );
+        assert_eq!(
+            converted.waveform_type,
+            Some(ScopeWaveformType::FillAndLine)
+        );
+        assert_eq!(
+            converted.waveform_color_max_hold,
+            Some(ScopeColor {
+                red: 7,
+                green: 8,
+                blue: 9,
+            })
+        );
         let json = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serde_json::from_str::<ClientMessage>(&json).unwrap(),

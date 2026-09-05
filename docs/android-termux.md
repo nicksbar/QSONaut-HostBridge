@@ -19,8 +19,8 @@ cd "$HOME/QSONaut-HostBridge"
 ```
 
 The script installs the user-level Rust and C toolchain, builds the native
-Android binary, and copies it to `$PREFIX/bin`. It uses the pinned Rigwright
-Git dependency; no sibling checkout is required.
+Android binary, and copies it to `$PREFIX/bin`. Rigwright is resolved from the
+published crate version in `Cargo.toml`; no sibling checkout is required.
 
 ## Configure and run
 

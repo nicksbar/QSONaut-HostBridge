@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "qsonaut-hostbridge-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rigwright",
  "serde",
@@ -673,8 +673,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rigwright"
-version = "0.1.21"
-source = "git+https://github.com/nicksbar/rigwright.git?rev=6a480c8d3de3dd914ce9ac9ac995acb5d999a5fa#6a480c8d3de3dd914ce9ac9ac995acb5d999a5fa"
+version = "0.1.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9b75c55f24d6c67ab2c160dcf51828691cc9d92f8149daee0b8b17c0d3cf72d"
 dependencies = [
  "anyhow",
  "async-trait",
