@@ -141,14 +141,17 @@ driver's optional counters and latency measurements. Raw protocol is only
 accepted after a radio lease is held and is dispatched to Rigwright unchanged;
 the client is responsible for knowing the selected driver's frame contract.
 
-## Current implementation gap
+## Current implementation boundary
 
 The current runtime has versioned stream metadata, explicit media direction,
 client-to-host media validation through `AudioSink`, selectable host playback
 outputs through `AudioOutputProvider`, structured request/media errors, bounded
 frame sizes, lag reporting, heartbeat pings, and PTT cleanup on session loss.
-It also exposes client-owned scope lifecycle, tuner status, driver link health,
-and driver-level raw protocol access.
+It also exposes client-owned scope lifecycle and readback, power, repeater
+settings, RIT/XIT, memory channels, DTMF, tuner status, driver link health,
+and driver-level raw protocol access. Unsupported operations remain explicit
+through the selected driver's capability flags; HostBridge never guesses a
+model feature.
 The Linux executable supplies dynamic Rigwright and ALSA adapters. Actual RF
 transmission remains a separate hardware/operator validation: media delivery
 does not key PTT or claim that a modem/radio chain is configured.

@@ -561,11 +561,13 @@ impl HostBridge {
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::ConfigureScope { request_id, config } => {
-                let scope = selected_radio
+                let radio = selected_radio
                     .as_ref()
-                    .and_then(|selection| selection.civ_scope.clone())
-                    .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?;
-                scope.set_scope_configuration(config.into()).await?;
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?;
+                if !radio.radio.supports_scope() {
+                    anyhow::bail!("scope is unavailable for selected radio")
+                }
+                radio.radio.set_scope_configuration(config.into()).await?;
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::StartScope { request_id } => {
@@ -643,6 +645,22 @@ impl HostBridge {
                 }
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
+            ClientMessage::GetScopeState { request_id } => {
+                let state = selected_radio
+                    .as_ref()
+                    .and_then(|selection| selection.civ_scope.clone())
+                    .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?
+                    .get_scope_state()
+                    .await?;
+                send_json(
+                    sink,
+                    &ServerMessage::ScopeState {
+                        request_id,
+                        state: state.into(),
+                    },
+                )
+                .await?;
+            }
             ClientMessage::GetState { request_id: _ } => {
                 send_json(sink, &state_message(selected_radio.as_ref()).await?).await?
             }
@@ -676,6 +694,174 @@ impl HostBridge {
                     .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
                     .radio
                     .set_ptt(enabled)
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::GetPower { request_id } => {
+                let enabled = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .get_power()
+                    .await?;
+                send_json(
+                    sink,
+                    &ServerMessage::PowerValue {
+                        request_id,
+                        enabled,
+                    },
+                )
+                .await?;
+            }
+            ClientMessage::SetPower {
+                request_id,
+                enabled,
+            } => {
+                selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .set_power(enabled)
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::GetRepeaterSettings { request_id } => {
+                let settings = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .get_repeater_settings()
+                    .await?;
+                send_json(
+                    sink,
+                    &ServerMessage::RepeaterSettings {
+                        request_id,
+                        settings: settings.into(),
+                    },
+                )
+                .await?;
+            }
+            ClientMessage::SetRepeaterSettings {
+                request_id,
+                settings,
+            } => {
+                selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .set_repeater_settings(settings.into())
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::GetRitOffset { request_id } => {
+                let offset_hz = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .get_rit_offset_hz()
+                    .await?;
+                send_json(
+                    sink,
+                    &ServerMessage::RitOffset {
+                        request_id,
+                        offset_hz,
+                    },
+                )
+                .await?;
+            }
+            ClientMessage::SetRitOffset {
+                request_id,
+                offset_hz,
+            } => {
+                selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .set_rit_offset_hz(offset_hz)
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::GetXitOffset { request_id } => {
+                let offset_hz = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .get_xit_offset_hz()
+                    .await?;
+                send_json(
+                    sink,
+                    &ServerMessage::XitOffset {
+                        request_id,
+                        offset_hz,
+                    },
+                )
+                .await?;
+            }
+            ClientMessage::SetXitOffset {
+                request_id,
+                offset_hz,
+            } => {
+                selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .set_xit_offset_hz(offset_hz)
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::SelectMemoryChannel {
+                request_id,
+                channel,
+            } => {
+                selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .select_memory_channel(channel)
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::ReadMemoryChannel {
+                request_id,
+                channel,
+            } => {
+                let channel = selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .read_memory_channel(channel)
+                    .await?;
+                send_json(
+                    sink,
+                    &ServerMessage::MemoryChannel {
+                        request_id,
+                        channel: channel.into(),
+                    },
+                )
+                .await?;
+            }
+            ClientMessage::WriteMemoryChannel {
+                request_id,
+                channel,
+            } => {
+                selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .write_memory_channel(channel.into())
+                    .await?;
+                send_json(sink, &ServerMessage::Ack { request_id }).await?;
+            }
+            ClientMessage::SendDtmf {
+                request_id,
+                sequence,
+            } => {
+                let sequence = rigwright::DtmfSequence::new(sequence)?;
+                selected_radio
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("select a radio first"))?
+                    .radio
+                    .send_dtmf(sequence)
                     .await?;
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
@@ -858,10 +1044,12 @@ async fn state_message(radio: Option<&RadioSelection>) -> Result<ServerMessage> 
         .ok()
         .flatten()
         .map(Into::into);
+    let power = radio.radio.get_power().await.ok();
     Ok(ServerMessage::State(RadioState {
         frequency_hz: radio.radio.get_frequency_hz().await.ok(),
         mode: radio.radio.get_mode().await.ok().map(Into::into),
         ptt: radio.radio.get_ptt().await.ok(),
+        power,
         controls: std::collections::BTreeMap::new(),
         meters: std::collections::BTreeMap::new(),
         tuner,
@@ -874,6 +1062,20 @@ fn radio_capabilities(
     model: Option<String>,
 ) -> RadioCapabilitiesInfo {
     let caps = radio.capabilities();
+    let model = model.or_else(|| match driver {
+        RadioDriver::IcomCiv => Some(rigwright::models::GENERIC_ICOM_MODEL.to_owned()),
+        RadioDriver::YaesuCat => Some(rigwright::models::GENERIC_YAESU_MODEL.to_owned()),
+        RadioDriver::YaesuLegacyCat => {
+            Some(rigwright::models::GENERIC_YAESU_CLASSIC_MODEL.to_owned())
+        }
+        RadioDriver::KenwoodCat => Some(rigwright::models::GENERIC_KENWOOD_MODEL.to_owned()),
+        RadioDriver::ElecraftCat => None,
+    });
+    let supported_baud_rates = model
+        .as_deref()
+        .and_then(rigwright::models::find_model)
+        .map(|profile| profile.supported_baud_rates().to_vec())
+        .unwrap_or_default();
     RadioCapabilitiesInfo {
         can_get_frequency: caps.can_get_frequency,
         can_set_frequency: caps.can_set_frequency,
@@ -906,9 +1108,15 @@ fn radio_capabilities(
             .collect(),
         tuner: radio.supports_control(ControlId::Tuner),
         scope: radio.supports_scope(),
+        iq_output: radio.supports_iq_output(),
+        repeater_settings: radio.supports_repeater_settings(),
+        memory_channels: radio.supports_memory_channels(),
+        memory_selection: radio.supports_memory_selection(),
+        send_dtmf: radio.supports_send_dtmf(),
         driver_metadata: Some(DriverMetadata {
             driver: Some(driver),
             model,
+            supported_baud_rates,
             controls: ControlId::ALL
                 .iter()
                 .copied()
@@ -961,6 +1169,7 @@ fn request_id_from_text(text: &str) -> Option<String> {
         | ClientMessage::ConfigureScope { request_id, .. }
         | ClientMessage::StartScope { request_id }
         | ClientMessage::StopScope { request_id }
+        | ClientMessage::GetScopeState { request_id }
         | ClientMessage::GetState { request_id }
         | ClientMessage::GetControl { request_id, .. }
         | ClientMessage::SetControl { request_id, .. }
@@ -972,6 +1181,18 @@ fn request_id_from_text(text: &str) -> Option<String> {
         | ClientMessage::SetFrequency { request_id, .. }
         | ClientMessage::SetMode { request_id, .. }
         | ClientMessage::SetPtt { request_id, .. }
+        | ClientMessage::GetPower { request_id }
+        | ClientMessage::SetPower { request_id, .. }
+        | ClientMessage::GetRepeaterSettings { request_id }
+        | ClientMessage::SetRepeaterSettings { request_id, .. }
+        | ClientMessage::GetRitOffset { request_id }
+        | ClientMessage::SetRitOffset { request_id, .. }
+        | ClientMessage::GetXitOffset { request_id }
+        | ClientMessage::SetXitOffset { request_id, .. }
+        | ClientMessage::SelectMemoryChannel { request_id, .. }
+        | ClientMessage::ReadMemoryChannel { request_id, .. }
+        | ClientMessage::WriteMemoryChannel { request_id, .. }
+        | ClientMessage::SendDtmf { request_id, .. }
         | ClientMessage::SelectAudio { request_id, .. }
         | ClientMessage::SelectAudioOutput { request_id, .. } => request_id,
         ClientMessage::Hello(_) | ClientMessage::Ping { .. } | ClientMessage::Pong { .. } => None,
@@ -1010,6 +1231,9 @@ mod tests {
             },
             ClientMessage::StopScope {
                 request_id: Some("scope-stop".into()),
+            },
+            ClientMessage::GetScopeState {
+                request_id: Some("scope-state".into()),
             },
         ] {
             let text = serde_json::to_string(&message).unwrap();
@@ -1103,12 +1327,29 @@ mod tests {
         assert!(capabilities.controls.is_empty());
         assert!(capabilities.meters.is_empty());
         assert!(!capabilities.tuner);
-        assert_eq!(capabilities.driver_metadata.as_ref().unwrap().model, None);
+        assert_eq!(
+            capabilities.driver_metadata.as_ref().unwrap().model,
+            Some(rigwright::models::GENERIC_ICOM_MODEL.to_owned())
+        );
         assert!(capabilities
             .driver_metadata
             .as_ref()
             .unwrap()
             .scope
             .is_none());
+    }
+
+    #[test]
+    fn driver_metadata_exposes_rigwright_host_baud_choices() {
+        let capabilities = radio_capabilities(
+            &rigwright::NullRadio::new(),
+            RadioDriver::IcomCiv,
+            Some("IC-7300".into()),
+        );
+
+        assert_eq!(
+            capabilities.driver_metadata.unwrap().supported_baud_rates,
+            vec![4_800, 9_600, 19_200, 38_400, 57_600, 115_200]
+        );
     }
 }

@@ -6,13 +6,14 @@
 //! future Opus/codec negotiation without changing radio control messages.
 
 use rigwright::{
-    ControlId, ControlValue, LinkHealth, MeterId, Mode, ScopeCenterType, ScopeColor,
-    ScopeMarkerPosition, ScopeMaxHold, ScopeWaveformType, TunerStatus,
+    ControlId, ControlValue, LinkHealth, MemoryChannel, MeterId, Mode, RepeaterSettings,
+    RepeaterShift, ScopeCenterType, ScopeColor, ScopeMarkerPosition, ScopeMaxHold,
+    ScopeWaveformType, TunerStatus,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 pub const MEDIA_HEADER_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,7 +63,10 @@ pub struct RadioCapabilitiesInfo {
     pub can_set_mode: bool,
     pub can_get_ptt: bool,
     pub can_set_ptt: bool,
+    /// Whether the host can read the transceiver's main power state. This is
+    /// not RF output-power metering or the RF output-power control.
     pub can_get_power: bool,
+    /// Whether the host can switch the transceiver's main power state.
     pub can_set_power: bool,
     pub can_raw_protocol: bool,
     pub controls: Vec<ControlCapability>,
@@ -70,6 +74,16 @@ pub struct RadioCapabilitiesInfo {
     pub tuner: bool,
     #[serde(default)]
     pub scope: bool,
+    #[serde(default)]
+    pub iq_output: bool,
+    #[serde(default)]
+    pub repeater_settings: bool,
+    #[serde(default)]
+    pub memory_channels: bool,
+    #[serde(default)]
+    pub memory_selection: bool,
+    #[serde(default)]
+    pub send_dtmf: bool,
     /// Metadata from the instantiated host-side Rigwright driver. Older
     /// clients may omit this field.
     #[serde(default)]
@@ -92,12 +106,170 @@ pub struct DriverMetadata {
     pub driver: Option<RadioDriver>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Baud rates supported by the selected model's host connection.
+    ///
+    /// This is intentionally distinct from any model-specific physical
+    /// remote/CI-V port metadata; Rigwright owns that distinction.
+    #[serde(default)]
+    pub supported_baud_rates: Vec<u32>,
     #[serde(default)]
     pub controls: Vec<ControlCapability>,
     #[serde(default)]
     pub scope: Option<ScopeMetadata>,
     #[serde(default)]
     pub filter_bandwidths: Vec<FilterBandwidthMetadata>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireToneMode {
+    #[default]
+    Off,
+    Encode,
+    EncodeDecode,
+    Dtcs,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WireToneSettings {
+    pub mode: WireToneMode,
+    pub index: u8,
+    pub frequency_tenths_hz: Option<u32>,
+    pub dtcs_code: Option<u16>,
+    pub dtcs_reverse: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WireRepeaterShift {
+    #[default]
+    Simplex,
+    Plus,
+    Minus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WireRepeaterSettings {
+    pub shift: WireRepeaterShift,
+    pub offset_hz: Option<u32>,
+    pub tone: WireToneSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WireMemoryChannel {
+    pub channel: u16,
+    pub name: Option<String>,
+    pub frequency_hz: u64,
+    pub transmit_frequency_hz: Option<u64>,
+    pub mode: WireMode,
+    pub repeater: WireRepeaterSettings,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WireScopeState {
+    pub configuration: ScopeConfiguration,
+    pub waveform_color_current: Option<WireScopeColor>,
+    pub waveform_color_line: Option<WireScopeColor>,
+    pub waveform_color_max_hold: Option<WireScopeColor>,
+}
+
+impl From<rigwright::ToneSettings> for WireToneSettings {
+    fn from(value: rigwright::ToneSettings) -> Self {
+        Self {
+            mode: match value.mode {
+                rigwright::ToneMode::Off => WireToneMode::Off,
+                rigwright::ToneMode::Encode => WireToneMode::Encode,
+                rigwright::ToneMode::EncodeDecode => WireToneMode::EncodeDecode,
+                rigwright::ToneMode::Dtcs => WireToneMode::Dtcs,
+            },
+            index: value.index,
+            frequency_tenths_hz: value.frequency_tenths_hz,
+            dtcs_code: value.dtcs_code,
+            dtcs_reverse: value.dtcs_reverse,
+        }
+    }
+}
+
+impl From<WireToneSettings> for rigwright::ToneSettings {
+    fn from(value: WireToneSettings) -> Self {
+        Self {
+            mode: match value.mode {
+                WireToneMode::Off => rigwright::ToneMode::Off,
+                WireToneMode::Encode => rigwright::ToneMode::Encode,
+                WireToneMode::EncodeDecode => rigwright::ToneMode::EncodeDecode,
+                WireToneMode::Dtcs => rigwright::ToneMode::Dtcs,
+            },
+            index: value.index,
+            frequency_tenths_hz: value.frequency_tenths_hz,
+            dtcs_code: value.dtcs_code,
+            dtcs_reverse: value.dtcs_reverse,
+        }
+    }
+}
+
+impl From<RepeaterSettings> for WireRepeaterSettings {
+    fn from(value: RepeaterSettings) -> Self {
+        Self {
+            shift: match value.shift {
+                RepeaterShift::Simplex => WireRepeaterShift::Simplex,
+                RepeaterShift::Plus => WireRepeaterShift::Plus,
+                RepeaterShift::Minus => WireRepeaterShift::Minus,
+            },
+            offset_hz: value.offset_hz,
+            tone: value.tone.into(),
+        }
+    }
+}
+
+impl From<WireRepeaterSettings> for RepeaterSettings {
+    fn from(value: WireRepeaterSettings) -> Self {
+        Self {
+            shift: match value.shift {
+                WireRepeaterShift::Simplex => RepeaterShift::Simplex,
+                WireRepeaterShift::Plus => RepeaterShift::Plus,
+                WireRepeaterShift::Minus => RepeaterShift::Minus,
+            },
+            offset_hz: value.offset_hz,
+            tone: value.tone.into(),
+        }
+    }
+}
+
+impl From<MemoryChannel> for WireMemoryChannel {
+    fn from(value: MemoryChannel) -> Self {
+        Self {
+            channel: value.channel,
+            name: value.name,
+            frequency_hz: value.frequency_hz,
+            transmit_frequency_hz: value.transmit_frequency_hz,
+            mode: value.mode.into(),
+            repeater: value.repeater.into(),
+        }
+    }
+}
+
+impl From<WireMemoryChannel> for MemoryChannel {
+    fn from(value: WireMemoryChannel) -> Self {
+        Self {
+            channel: value.channel,
+            name: value.name,
+            frequency_hz: value.frequency_hz,
+            transmit_frequency_hz: value.transmit_frequency_hz,
+            mode: value.mode.into(),
+            repeater: value.repeater.into(),
+        }
+    }
+}
+
+impl From<rigwright::ScopeState> for WireScopeState {
+    fn from(value: rigwright::ScopeState) -> Self {
+        Self {
+            configuration: ScopeConfiguration::from(value.configuration),
+            waveform_color_current: value.waveform_color_current.map(Into::into),
+            waveform_color_line: value.waveform_color_line.map(Into::into),
+            waveform_color_max_hold: value.waveform_color_max_hold.map(Into::into),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -157,6 +329,7 @@ pub struct ScopeEdgeBankMetadata {
 #[serde(rename_all = "snake_case")]
 pub enum WireMeterId {
     Signal,
+    /// Forward RF power metering, distinct from transceiver main power state.
     Power,
     Swr,
     Alc,
@@ -540,6 +713,34 @@ impl From<ScopeConfiguration> for rigwright::ScopeConfiguration {
     }
 }
 
+impl From<rigwright::ScopeConfiguration> for ScopeConfiguration {
+    fn from(config: rigwright::ScopeConfiguration) -> Self {
+        Self {
+            span_hz: config.span_hz,
+            fixed_edges_hz: config.fixed_edges_hz,
+            fixed_edge_number: config.fixed_edge_number,
+            hold: config.hold,
+            reference_level_tenths_db: config.reference_level_tenths_db,
+            sweep_speed: config.sweep_speed,
+            center_mode: config.center_mode,
+            vbw_wide: config.vbw_wide,
+            center_type: config.center_type.map(Into::into),
+            tx_display: config.tx_display,
+            max_hold: config.max_hold.map(Into::into),
+            marker_position: config.marker_position.map(Into::into),
+            averaging: config.averaging,
+            waveform_type: config.waveform_type.map(Into::into),
+            waterfall_display: config.waterfall_display,
+            waterfall_size: config.waterfall_size,
+            waterfall_peak_level: config.waterfall_peak_level,
+            marker_auto_hide: config.marker_auto_hide,
+            waveform_color_current: config.waveform_color_current.map(Into::into),
+            waveform_color_line: config.waveform_color_line.map(Into::into),
+            waveform_color_max_hold: config.waveform_color_max_hold.map(Into::into),
+        }
+    }
+}
+
 impl From<TunerStatus> for WireTunerStatus {
     fn from(status: TunerStatus) -> Self {
         Self {
@@ -647,6 +848,10 @@ pub enum ClientMessage {
         #[serde(default)]
         request_id: Option<String>,
     },
+    GetScopeState {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
     GetState {
         #[serde(default)]
         request_id: Option<String>,
@@ -699,6 +904,62 @@ pub enum ClientMessage {
         request_id: Option<String>,
         enabled: bool,
     },
+    GetPower {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
+    SetPower {
+        #[serde(default)]
+        request_id: Option<String>,
+        enabled: bool,
+    },
+    GetRepeaterSettings {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
+    SetRepeaterSettings {
+        #[serde(default)]
+        request_id: Option<String>,
+        settings: WireRepeaterSettings,
+    },
+    GetRitOffset {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
+    SetRitOffset {
+        #[serde(default)]
+        request_id: Option<String>,
+        offset_hz: i32,
+    },
+    GetXitOffset {
+        #[serde(default)]
+        request_id: Option<String>,
+    },
+    SetXitOffset {
+        #[serde(default)]
+        request_id: Option<String>,
+        offset_hz: i32,
+    },
+    SelectMemoryChannel {
+        #[serde(default)]
+        request_id: Option<String>,
+        channel: u16,
+    },
+    ReadMemoryChannel {
+        #[serde(default)]
+        request_id: Option<String>,
+        channel: u16,
+    },
+    WriteMemoryChannel {
+        #[serde(default)]
+        request_id: Option<String>,
+        channel: WireMemoryChannel,
+    },
+    SendDtmf {
+        #[serde(default)]
+        request_id: Option<String>,
+        sequence: String,
+    },
     SelectAudio {
         #[serde(default)]
         request_id: Option<String>,
@@ -736,6 +997,26 @@ pub enum ServerMessage {
         control_id: String,
         value: Option<WireControlValue>,
     },
+    PowerValue {
+        request_id: Option<String>,
+        enabled: bool,
+    },
+    RepeaterSettings {
+        request_id: Option<String>,
+        settings: WireRepeaterSettings,
+    },
+    RitOffset {
+        request_id: Option<String>,
+        offset_hz: i32,
+    },
+    XitOffset {
+        request_id: Option<String>,
+        offset_hz: i32,
+    },
+    MemoryChannel {
+        request_id: Option<String>,
+        channel: WireMemoryChannel,
+    },
     MeterValue {
         request_id: Option<String>,
         meter_id: WireMeterId,
@@ -743,6 +1024,10 @@ pub enum ServerMessage {
     },
     ScopeFrame {
         bins: Vec<u8>,
+    },
+    ScopeState {
+        request_id: Option<String>,
+        state: WireScopeState,
     },
     TunerStatus {
         request_id: Option<String>,
@@ -775,6 +1060,8 @@ pub struct RadioState {
     pub frequency_hz: Option<u64>,
     pub mode: Option<WireMode>,
     pub ptt: Option<bool>,
+    #[serde(default)]
+    pub power: Option<bool>,
     #[serde(default)]
     pub controls: std::collections::BTreeMap<String, WireControlValue>,
     #[serde(default)]
@@ -938,6 +1225,7 @@ mod tests {
         let metadata = DriverMetadata {
             driver: Some(RadioDriver::IcomCiv),
             model: Some("IC-7300".into()),
+            supported_baud_rates: vec![4_800, 9_600, 19_200, 38_400, 57_600, 115_200],
             controls: vec![ControlCapability {
                 id: "Preamp".into(),
                 readable: true,
@@ -972,6 +1260,55 @@ mod tests {
         let capabilities: RadioCapabilitiesInfo = serde_json::from_str(old).unwrap();
         assert!(capabilities.driver_metadata.is_none());
         assert!(capabilities.controls[0].discrete_values.is_empty());
+        assert!(!capabilities.iq_output);
+        assert!(!capabilities.memory_channels);
+    }
+
+    #[test]
+    fn extended_radio_operations_round_trip() {
+        let messages = [
+            ClientMessage::SetPower {
+                request_id: Some("power".into()),
+                enabled: true,
+            },
+            ClientMessage::SetRitOffset {
+                request_id: Some("rit".into()),
+                offset_hz: -125,
+            },
+            ClientMessage::SendDtmf {
+                request_id: Some("dtmf".into()),
+                sequence: "*21#".into(),
+            },
+            ClientMessage::WriteMemoryChannel {
+                request_id: Some("memory".into()),
+                channel: WireMemoryChannel {
+                    channel: 12,
+                    name: Some("Repeater".into()),
+                    frequency_hz: 146_520_000,
+                    transmit_frequency_hz: Some(145_920_000),
+                    mode: WireMode::Fm,
+                    repeater: WireRepeaterSettings {
+                        shift: WireRepeaterShift::Minus,
+                        offset_hz: Some(600_000),
+                        tone: WireToneSettings {
+                            mode: WireToneMode::EncodeDecode,
+                            index: 3,
+                            frequency_tenths_hz: Some(885),
+                            dtcs_code: None,
+                            dtcs_reverse: None,
+                        },
+                    },
+                },
+            },
+        ];
+
+        for message in messages {
+            let json = serde_json::to_string(&message).unwrap();
+            assert_eq!(
+                serde_json::from_str::<ClientMessage>(&json).unwrap(),
+                message
+            );
+        }
     }
 
     #[test]

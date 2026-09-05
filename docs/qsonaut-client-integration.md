@@ -103,9 +103,17 @@ host.
 The optional `radio_capabilities.driver_metadata` field is the selected
 driver's detailed source of truth. It carries driver/model identity, scope
 geometry and legal option values, control maxima/discrete values, and
-mode/filter bandwidth entries. Clients may use a local Rigwright profile only
-as an explicit fallback when this field is omitted; a present but missing
-value means that control is unavailable rather than guessed.
+mode/filter bandwidth entries. It also carries `supported_baud_rates`, which
+is the selected model's host-connection baud list from Rigwright. Clients may
+use a local Rigwright profile only as an explicit fallback when this field is
+omitted; a present but missing value means that control or connection choice
+is unavailable rather than guessed.
+
+The `can_get_power` and `can_set_power` flags refer only to the
+transceiver's main power state. They do not refer to RF output power. RF
+output power is the `RfPower` control, while forward RF power metering is the
+`Power` meter. Some radios, including the IC-7300 CI-V profile, support the
+main-power write operation but not reliable main-power readback.
 
 `capabilities.audio_sources` contains host-owned capture inputs. Each source
 has an opaque `id`, label, kind, and exact supported formats. Select one with:
@@ -282,7 +290,7 @@ examples from one host, not a compile-time device list.
 ## QSONaut implementation checklist
 
 - [ ] Add a HostBridge endpoint configuration and credential storage path.
-- [ ] Connect using WebSocket and send protocol-v3 `hello`.
+- [ ] Connect using WebSocket and send protocol-v7 `hello`.
 - [ ] Render dynamic radio/audio catalogs from `HostHello.capabilities`.
 - [ ] Select radio by advertised ID and handle lease errors.
 - [ ] Select exact audio source and format by advertised ID.
@@ -294,6 +302,7 @@ examples from one host, not a compile-time device list.
 - [ ] Force local PTT off on disconnect and reconnect.
 - [ ] Treat reconnect as a new session and reacquire all resources.
 - [ ] Keep client-to-host media disabled until `audio_playback` is advertised.
-- [ ] Build remote control, meter, and tuner UI from selected-radio
+- [ ] Build remote control, meter, tuner, power, repeater, offset, memory,
+  DTMF, and scope UI from selected-radio
   `radio_capabilities`; do not expose local hardware or raw control IDs.
 - [ ] Add integration fixtures for the reference catalog and binary frames.

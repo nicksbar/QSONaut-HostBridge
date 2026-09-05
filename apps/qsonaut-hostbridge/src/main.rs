@@ -192,13 +192,29 @@ fn systemctl(args: &[&str]) -> Result<()> {
 
 fn configured_radios() -> Result<ConfiguredRadioProvider> {
     let mut entries = Vec::new();
-    let Ok(devices) = fs::read_dir("/dev/serial/by-id") else {
-        return Ok(ConfiguredRadioProvider::new(entries));
-    };
-    for device in devices.flatten() {
-        let file_name = device.file_name().to_string_lossy().into_owned();
-        let path = device.path().to_string_lossy().into_owned();
-        add_radio_entry(&mut entries, file_name, path);
+    let mut paths = std::collections::HashSet::new();
+    if let Ok(devices) = fs::read_dir("/dev/serial/by-id") {
+        for device in devices.flatten() {
+            let file_name = device.file_name().to_string_lossy().into_owned();
+            let path = device.path().to_string_lossy().into_owned();
+            paths.insert(path.clone());
+            add_radio_entry(&mut entries, file_name, path);
+        }
+    }
+
+    // Keep stable Linux by-id entries when available, but enumerate the
+    // serialport crate on Windows, macOS, and Linux installations without
+    // udev by-id symlinks. Raw paths remain host-local and never enter the
+    // protocol catalog.
+    for port in serialport::available_ports().unwrap_or_default() {
+        if paths.contains(&port.port_name) {
+            continue;
+        }
+        add_radio_entry(
+            &mut entries,
+            format!("serial-{:016x}", stable_stream_id(&port.port_name)),
+            port.port_name,
+        );
     }
     Ok(ConfiguredRadioProvider::new(entries))
 }
@@ -253,8 +269,13 @@ fn add_radio_entry(entries: &mut Vec<RadioProviderEntry>, file_name: String, pat
                 request.radio_address,
             )?;
             let civ_scope = configured.as_icom().cloned().map(Arc::new);
+            let session = rigwright::RadioSession::from_radio(
+                Arc::new(configured),
+                rigwright::SessionConfig::default(),
+            )
+            .map_err(|error| anyhow::anyhow!("start Rigwright radio session: {error}"))?;
             Ok(RadioSession {
-                radio: Arc::new(configured) as Arc<dyn Radio>,
+                radio: Arc::new(session) as Arc<dyn Radio>,
                 civ_scope,
             })
         }),

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Consume the published Rigwright 0.1.24 crate, including the FT-991A CAT
+  compatibility fix; HostBridge inherits the model-aware VFO behavior through
+  its Rigwright factory.
+- Advance the control protocol to v7 and expose power, repeater settings,
+  RIT/XIT, memory channels, DTMF, scope readback, IQ capability, and the
+  corresponding model capability flags.
+- Route selected radio operations through Rigwright's serialized
+  `RadioSession`, including its bounded command/event handling and PTT safety
+  watchdog.
+- Advertise the selected Rigwright model's supported host-connection baud
+  rates in `radio_capabilities.driver_metadata`, including the expanded Icom
+  USB/native choices.
+- Enumerate serial ports through Rigwright's serial-port stack on platforms
+  without Linux `/dev/serial/by-id` links while keeping physical paths host
+  local.
+
 ## [0.1.2] - 2026-09-04
 
 - Add the HostBridge driver-metadata negotiation surface for Rigwright 0.1.22.
