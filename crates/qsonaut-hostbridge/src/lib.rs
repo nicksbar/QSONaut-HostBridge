@@ -566,18 +566,7 @@ impl HostBridge {
                     .as_ref()
                     .and_then(|selection| selection.civ_scope.clone())
                     .ok_or_else(|| anyhow::anyhow!("scope is unavailable for selected radio"))?;
-                scope
-                    .set_scope_configuration(rigwright::ScopeConfiguration {
-                        span_hz: config.span_hz,
-                        fixed_edges_hz: config.fixed_edges_hz,
-                        fixed_edge_number: config.fixed_edge_number,
-                        hold: config.hold,
-                        reference_level_tenths_db: config.reference_level_tenths_db,
-                        sweep_speed: config.sweep_speed,
-                        center_mode: config.center_mode,
-                        vbw_wide: config.vbw_wide,
-                    })
-                    .await?;
+                scope.set_scope_configuration(config.into()).await?;
                 send_json(sink, &ServerMessage::Ack { request_id }).await?;
             }
             ClientMessage::StartScope { request_id } => {

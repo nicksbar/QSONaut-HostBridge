@@ -220,29 +220,31 @@ fn add_radio_entry(entries: &mut Vec<RadioProviderEntry>, file_name: String, pat
                 RadioDriver::YaesuCat => GENERIC_YAESU_MODEL,
                 RadioDriver::YaesuLegacyCat => GENERIC_YAESU_CLASSIC_MODEL,
                 RadioDriver::KenwoodCat => GENERIC_KENWOOD_MODEL,
-                RadioDriver::ElecraftCat => anyhow::bail!("Elecraft requires an explicit model"),
+                RadioDriver::ElecraftCat => {
+                    anyhow::bail!("Elecraft requires an explicit model (for example K4 or K3S)")
+                }
             });
-            let model_driver = find_model(model)
-                .map(|profile| match profile.protocol {
-                    Protocol::IcomCiV { .. } => RadioDriver::IcomCiv,
-                    Protocol::YaesuCat => RadioDriver::YaesuCat,
-                    Protocol::YaesuLegacyCat => RadioDriver::YaesuLegacyCat,
-                    Protocol::KenwoodCat => RadioDriver::KenwoodCat,
-                    Protocol::ElecraftCat => RadioDriver::ElecraftCat,
-                })
+            let profile = find_model(model)
                 .ok_or_else(|| anyhow::anyhow!("unknown HostBridge radio model: {model}"))?;
+            let model_driver = match profile.protocol {
+                Protocol::IcomCiV { .. } => RadioDriver::IcomCiv,
+                Protocol::YaesuCat => RadioDriver::YaesuCat,
+                Protocol::YaesuLegacyCat => RadioDriver::YaesuLegacyCat,
+                Protocol::KenwoodCat => RadioDriver::KenwoodCat,
+                Protocol::ElecraftCat => RadioDriver::ElecraftCat,
+            };
             if model_driver != request.driver {
                 anyhow::bail!(
                     "selected driver {:?} does not match model {model}",
                     request.driver
                 );
             }
-            let baud_rate = request.baud_rate.unwrap_or(match request.driver {
-                RadioDriver::IcomCiv | RadioDriver::KenwoodCat => 115_200,
-                RadioDriver::YaesuCat => 38_400,
-                RadioDriver::YaesuLegacyCat => 4_800,
-                RadioDriver::ElecraftCat => 38_400,
-            });
+            let baud_rate = request
+                .baud_rate
+                .or_else(|| profile.fastest_supported_baud_rate())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Rigwright has no default baud rate for radio model {model}")
+                })?;
             let configured = open_model_with_radio_address(
                 model,
                 factory_path.clone(),

@@ -46,7 +46,7 @@ Clone the two sibling repositories expected by the workspace:
 
 ```sh
 git clone https://github.com/nicksbar/QSONaut-HostBridge "$HOME/QSONaut-HostBridge"
-git clone --branch release/0.1.21 https://github.com/nicksbar/rigwright "$HOME/rigwright"
+git clone --branch release/0.1.22 https://github.com/nicksbar/rigwright "$HOME/rigwright"
 cd "$HOME/QSONaut-HostBridge"
 ```
 
