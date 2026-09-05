@@ -42,11 +42,10 @@ sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
 . "$HOME/.cargo/env"
 ```
 
-Clone the two sibling repositories expected by the workspace:
+Clone HostBridge:
 
 ```sh
 git clone https://github.com/nicksbar/QSONaut-HostBridge "$HOME/QSONaut-HostBridge"
-git clone --branch release/0.1.22 https://github.com/nicksbar/rigwright "$HOME/rigwright"
 cd "$HOME/QSONaut-HostBridge"
 ```
 
