@@ -90,6 +90,14 @@ available on both sides.
 
 ## Driver-owned scope services
 
+The post-selection `radio_capabilities` message optionally includes
+`driver_metadata`, projected from the instantiated Rigwright driver. Its scope
+member carries geometry, edge banks, and legal option values; its controls and
+filter entries carry driver-owned ranges and per-mode bandwidths. HostBridge
+does not duplicate model tables. Older clients may ignore this optional field,
+while newer clients treat an omitted field as a compatibility case and a
+present-but-missing value as unavailable.
+
 Scope lifecycle belongs to the client. Selecting a radio only advertises the
 driver's scope capability; it does not configure or start a scope stream.
 Clients that receive a scope-capable radio may apply settings and control the

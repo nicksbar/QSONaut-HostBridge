@@ -533,15 +533,12 @@ impl HostBridge {
                     &device_id,
                     &RadioOpenRequest {
                         driver,
-                        model,
+                        model: model.clone(),
                         baud_rate,
                         radio_address,
                     },
                 )?;
-                let scope_supported = session
-                    .civ_scope
-                    .as_ref()
-                    .is_some_and(|scope| scope.supports_scope());
+                let scope_supported = session.radio.supports_scope();
                 let radio = session.radio;
                 *selected_radio = Some(RadioSelection {
                     id: device_id,
@@ -556,6 +553,8 @@ impl HostBridge {
                         .expect("radio selected")
                         .radio
                         .as_ref(),
+                    driver,
+                    model,
                 );
                 capabilities.scope = scope_supported;
                 send_json(sink, &ServerMessage::RadioCapabilities(capabilities)).await?;
@@ -869,7 +868,11 @@ async fn state_message(radio: Option<&RadioSelection>) -> Result<ServerMessage> 
     }))
 }
 
-fn radio_capabilities(radio: &dyn Radio) -> RadioCapabilitiesInfo {
+fn radio_capabilities(
+    radio: &dyn Radio,
+    driver: RadioDriver,
+    model: Option<String>,
+) -> RadioCapabilitiesInfo {
     let caps = radio.capabilities();
     RadioCapabilitiesInfo {
         can_get_frequency: caps.can_get_frequency,
@@ -889,6 +892,11 @@ fn radio_capabilities(radio: &dyn Radio) -> RadioCapabilitiesInfo {
                 id: control_id_key(id),
                 readable: radio.supports_control_read(id),
                 writable: radio.supports_control_write(id),
+                contiguous_maximum: radio.control_max(id),
+                discrete_values: radio
+                    .supported_control_values(id)
+                    .unwrap_or_default()
+                    .to_vec(),
             })
             .collect(),
         meters: radio
@@ -897,7 +905,52 @@ fn radio_capabilities(radio: &dyn Radio) -> RadioCapabilitiesInfo {
             .map(Into::into)
             .collect(),
         tuner: radio.supports_control(ControlId::Tuner),
-        scope: false,
+        scope: radio.supports_scope(),
+        driver_metadata: Some(DriverMetadata {
+            driver: Some(driver),
+            model,
+            controls: ControlId::ALL
+                .iter()
+                .copied()
+                .filter(|id| radio.supports_control(*id))
+                .map(|id| ControlCapability {
+                    id: control_id_key(id),
+                    readable: radio.supports_control_read(id),
+                    writable: radio.supports_control_write(id),
+                    contiguous_maximum: radio.control_max(id),
+                    discrete_values: radio
+                        .supported_control_values(id)
+                        .unwrap_or_default()
+                        .to_vec(),
+                })
+                .collect(),
+            scope: radio.scope_metadata().map(Into::into),
+            filter_bandwidths: [
+                Mode::Lsb,
+                Mode::Usb,
+                Mode::Cw,
+                Mode::Data,
+                Mode::Am,
+                Mode::Fm,
+                Mode::Wfm,
+                Mode::Rtty,
+                Mode::CwReverse,
+                Mode::RttyReverse,
+            ]
+            .into_iter()
+            .flat_map(|mode| {
+                (0..=u8::MAX).filter_map(move |filter| {
+                    radio.filter_bandwidth_hz(mode, filter).map(|bandwidth_hz| {
+                        FilterBandwidthMetadata {
+                            mode: mode.into(),
+                            filter,
+                            bandwidth_hz,
+                        }
+                    })
+                })
+            })
+            .collect(),
+        }),
     }
 }
 
@@ -1039,7 +1092,7 @@ mod tests {
     #[test]
     fn null_radio_capabilities_preserve_core_surface_without_inventing_controls() {
         let radio = rigwright::NullRadio::new();
-        let capabilities = radio_capabilities(&radio);
+        let capabilities = radio_capabilities(&radio, RadioDriver::IcomCiv, None);
 
         assert!(capabilities.can_get_frequency);
         assert!(capabilities.can_set_frequency);
@@ -1050,5 +1103,12 @@ mod tests {
         assert!(capabilities.controls.is_empty());
         assert!(capabilities.meters.is_empty());
         assert!(!capabilities.tuner);
+        assert_eq!(capabilities.driver_metadata.as_ref().unwrap().model, None);
+        assert!(capabilities
+            .driver_metadata
+            .as_ref()
+            .unwrap()
+            .scope
+            .is_none());
     }
 }

@@ -100,6 +100,13 @@ choice and sends it in `select_radio`; all driver configurations for one
 physical resource share one exclusive lease. Host paths remain private to the
 host.
 
+The optional `radio_capabilities.driver_metadata` field is the selected
+driver's detailed source of truth. It carries driver/model identity, scope
+geometry and legal option values, control maxima/discrete values, and
+mode/filter bandwidth entries. Clients may use a local Rigwright profile only
+as an explicit fallback when this field is omitted; a present but missing
+value means that control is unavailable rather than guessed.
+
 `capabilities.audio_sources` contains host-owned capture inputs. Each source
 has an opaque `id`, label, kind, and exact supported formats. Select one with:
 

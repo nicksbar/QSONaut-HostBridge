@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.2] - 2026-09-04
+
+- Add the HostBridge driver-metadata negotiation surface for Rigwright 0.1.22.
+- Refresh selected-radio metadata after reconnect and reselection.
+- Expose serialized driver/model metadata after radio selection, including
+  scope geometry/options, control ranges and discrete values, and per-mode
+  filter bandwidths. Values are projected from the instantiated Rigwright
+  driver; HostBridge does not maintain model tables.
+- Replay the last radio selection after reconnect so metadata is refreshed.
+
 ## [0.1.1] - 2026-09-04
 
 - Keep scope lifecycle and configuration in clients; HostBridge only advertises

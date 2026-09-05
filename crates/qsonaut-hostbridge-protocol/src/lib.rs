@@ -70,6 +70,10 @@ pub struct RadioCapabilitiesInfo {
     pub tuner: bool,
     #[serde(default)]
     pub scope: bool,
+    /// Metadata from the instantiated host-side Rigwright driver. Older
+    /// clients may omit this field.
+    #[serde(default)]
+    pub driver_metadata: Option<DriverMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,6 +81,76 @@ pub struct ControlCapability {
     pub id: String,
     pub readable: bool,
     pub writable: bool,
+    #[serde(default)]
+    pub contiguous_maximum: Option<u8>,
+    #[serde(default)]
+    pub discrete_values: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DriverMetadata {
+    pub driver: Option<RadioDriver>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub controls: Vec<ControlCapability>,
+    #[serde(default)]
+    pub scope: Option<ScopeMetadata>,
+    #[serde(default)]
+    pub filter_bandwidths: Vec<FilterBandwidthMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FilterBandwidthMetadata {
+    pub mode: WireMode,
+    pub filter: u8,
+    pub bandwidth_hz: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ScopeMetadata {
+    pub waveform_bins: usize,
+    pub waveform_divisions: u8,
+    #[serde(default)]
+    pub span_options_hz: Vec<u64>,
+    #[serde(default)]
+    pub sweep_speed_values: Vec<u8>,
+    #[serde(default)]
+    pub fixed_edge_numbers: Vec<u8>,
+    pub reference_level_range_tenths_db: Option<(i16, i16, i16)>,
+    pub supports_hold: bool,
+    pub supports_vbw: bool,
+    #[serde(default)]
+    pub center_type_options: Vec<WireScopeCenterType>,
+    #[serde(default)]
+    pub tx_display_options: Vec<bool>,
+    #[serde(default)]
+    pub max_hold_options: Vec<WireScopeMaxHold>,
+    #[serde(default)]
+    pub marker_position_options: Vec<WireScopeMarkerPosition>,
+    #[serde(default)]
+    pub averaging_options: Vec<u8>,
+    #[serde(default)]
+    pub waveform_type_options: Vec<WireScopeWaveformType>,
+    #[serde(default)]
+    pub waterfall_display_options: Vec<bool>,
+    #[serde(default)]
+    pub waterfall_size_options: Vec<u8>,
+    #[serde(default)]
+    pub waterfall_peak_level_options: Vec<u8>,
+    #[serde(default)]
+    pub marker_auto_hide_options: Vec<bool>,
+    #[serde(default)]
+    pub edge_banks: Vec<ScopeEdgeBankMetadata>,
+    pub supports_waveform_colors: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScopeEdgeBankMetadata {
+    pub low_hz: u64,
+    pub high_hz: u64,
+    #[serde(default)]
+    pub edge_numbers: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -383,6 +457,61 @@ impl From<ScopeWaveformType> for WireScopeWaveformType {
     }
 }
 
+impl From<rigwright::ScopeMetadata> for ScopeMetadata {
+    fn from(value: rigwright::ScopeMetadata) -> Self {
+        Self {
+            waveform_bins: value.waveform_bins,
+            waveform_divisions: value.waveform_divisions,
+            span_options_hz: value.span_options_hz.to_vec(),
+            sweep_speed_values: value.sweep_speed_values.to_vec(),
+            fixed_edge_numbers: value.fixed_edge_numbers.to_vec(),
+            reference_level_range_tenths_db: value.reference_level_range_tenths_db,
+            supports_hold: value.supports_hold,
+            supports_vbw: value.supports_vbw,
+            center_type_options: value
+                .center_type_options
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+            tx_display_options: value.tx_display_options.to_vec(),
+            max_hold_options: value
+                .max_hold_options
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+            marker_position_options: value
+                .marker_position_options
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+            averaging_options: value.averaging_options.to_vec(),
+            waveform_type_options: value
+                .waveform_type_options
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+            waterfall_display_options: value.waterfall_display_options.to_vec(),
+            waterfall_size_options: value.waterfall_size_options.to_vec(),
+            waterfall_peak_level_options: value.waterfall_peak_level_options.to_vec(),
+            marker_auto_hide_options: value.marker_auto_hide_options.to_vec(),
+            edge_banks: value
+                .edge_banks
+                .iter()
+                .map(|bank| ScopeEdgeBankMetadata {
+                    low_hz: bank.low_hz,
+                    high_hz: bank.high_hz,
+                    edge_numbers: bank.edge_numbers.to_vec(),
+                })
+                .collect(),
+            supports_waveform_colors: value.supports_waveform_colors,
+        }
+    }
+}
+
 impl From<ScopeConfiguration> for rigwright::ScopeConfiguration {
     fn from(config: ScopeConfiguration) -> Self {
         Self {
@@ -593,6 +722,7 @@ pub enum ClientMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     Hello(HostHello),
@@ -796,6 +926,52 @@ mod tests {
         );
         assert_eq!(control_id_from_key("rfpower"), Some(ControlId::RfPower));
         assert_eq!(WireMeterId::Signal, MeterId::Signal.into());
+    }
+
+    #[test]
+    fn driver_metadata_projects_scope_profile_and_round_trips() {
+        let profile = rigwright::icom::profile::profile_for_model(rigwright::IcomCivModel::Ic7300);
+        let scope: ScopeMetadata = profile.scope_metadata().unwrap().into();
+        assert_eq!(scope.waveform_bins, 475);
+        assert!(!scope.span_options_hz.is_empty());
+        assert!(!scope.edge_banks.is_empty());
+        let metadata = DriverMetadata {
+            driver: Some(RadioDriver::IcomCiv),
+            model: Some("IC-7300".into()),
+            controls: vec![ControlCapability {
+                id: "Preamp".into(),
+                readable: true,
+                writable: true,
+                contiguous_maximum: Some(4),
+                discrete_values: Vec::new(),
+            }],
+            scope: Some(scope),
+            filter_bandwidths: vec![FilterBandwidthMetadata {
+                mode: WireMode::Usb,
+                filter: 1,
+                bandwidth_hz: 3_000,
+            }],
+        };
+        assert_eq!(
+            serde_json::from_str::<DriverMetadata>(&serde_json::to_string(&metadata).unwrap())
+                .unwrap(),
+            metadata
+        );
+    }
+
+    #[test]
+    fn old_capability_messages_default_new_metadata() {
+        let old = r#"{
+            "can_get_frequency":true,"can_set_frequency":true,
+            "can_get_mode":true,"can_set_mode":true,
+            "can_get_ptt":true,"can_set_ptt":true,
+            "can_get_power":false,"can_set_power":false,
+            "can_raw_protocol":false,"controls":[{"id":"Filter","readable":true,"writable":true}],
+            "meters":[],"tuner":false,"scope":false
+        }"#;
+        let capabilities: RadioCapabilitiesInfo = serde_json::from_str(old).unwrap();
+        assert!(capabilities.driver_metadata.is_none());
+        assert!(capabilities.controls[0].discrete_values.is_empty());
     }
 
     #[test]
