@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 - Rigwright 0.1.26 and WebSocket dependency refresh
 
 - Consume the published Rigwright 0.1.26 crate, including the expanded
   model-aware driver validation, 90% coverage gates, and current CI/release
