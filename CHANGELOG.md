@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- Consume the published Rigwright 0.1.24 crate, including the FT-991A CAT
-  compatibility fix; HostBridge inherits the model-aware VFO behavior through
-  its Rigwright factory.
+- Consume the published Rigwright 0.1.26 crate, including the expanded
+  model-aware driver validation, 90% coverage gates, and current CI/release
+  fixes.
 - Advance the control protocol to v7 and expose power, repeater settings,
   RIT/XIT, memory channels, DTMF, scope readback, IQ capability, and the
   corresponding model capability flags.
