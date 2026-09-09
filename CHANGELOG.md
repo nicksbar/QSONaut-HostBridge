@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4 - Rigwright 0.1.28
+
+- Consume the published Rigwright 0.1.28 crate, including the IC-756 PRO
+  family and Yaesu FT-1000/FT-1000D profile support.
+- Keep the HostBridge protocol and runtime surface unchanged while exposing
+  the new Rigwright model catalog through the existing selection and metadata
+  paths.
+
 ## 0.1.3 - Rigwright 0.1.26 and WebSocket dependency refresh
 
 - Consume the published Rigwright 0.1.26 crate, including the expanded
