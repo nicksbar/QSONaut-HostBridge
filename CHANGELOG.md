@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.5 - Rigwright 0.1.29
+
+- Consume the published Rigwright 0.1.29 crate to correct FT-991A filter-width
+  CAT writes and readback through the existing HostBridge radio provider.
+- Inherit model-owned `SH` framing: FT-991A uses `SH0nn;`, while FT-710,
+  FTDX10, and FTDX101D/MP retain `SH00nn;`. No protocol version change is needed.
+- Physical FT-991A confirmation of the reported post-preset timeout sequence
+  remains pending; application bandwidth-preset selection is a separate issue.
+
 ## 0.1.4 - Rigwright 0.1.28
 
 - Consume the published Rigwright 0.1.28 crate, including the IC-756 PRO
