@@ -1,6 +1,6 @@
 # QSONaut client integration guide
 
-This is the client-facing guide for implementing HostBridge protocol v2 in
+This is the client-facing guide for implementing HostBridge protocol v7 in
 QSONaut. The goal is that a QSONaut developer can implement the connector from
 this document and the protocol crate, without inspecting HostBridge runtime
 internals.
@@ -35,7 +35,7 @@ The first text message must be:
 ```json
 {
   "type": "hello",
-  "protocol_version": 6,
+  "protocol_version": 7,
   "client_name": "QSONaut",
   "access_key": "station-1",
   "password": "configured-secret"
@@ -47,7 +47,7 @@ The host replies with `hello`:
 ```json
 {
   "type": "hello",
-  "protocol_version": 6,
+  "protocol_version": 7,
   "session_id": "uuid",
   "host_name": "Pi station",
   "capabilities": { }

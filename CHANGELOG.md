@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.1.6] - 2026-10-27
+
+- Consume the published Rigwright 0.1.30 crate, inheriting the corrected
+  IC-756PROII capability surface: RIT-offset and tuner-status reads are not
+  advertised, and Split is write-only through the existing directional
+  control capability projection.
+- Integrate Dependabot patch updates into the prepared 0.1.6 lockfile:
+  thiserror and thiserror-impl 2.0.20 -> 2.0.21 (#14), clap and clap_builder
+  4.6.6 -> 4.6.7 plus clap_derive 4.6.4 -> 4.6.7 (#12), serialport
+  4.10.0 -> 4.10.1 (#11), and uuid 1.26.0 -> 1.26.1 (#10). The Rigwright
+  0.1.29 -> 0.1.30 update proposed by #13 is already included above.
+- Align transitive rustls 0.23.43 -> 0.23.46 across repositories with
+  QSONaut Dependabot #105, including upstream handshake/security hardening.
+  Preserve the existing tokio-tungstenite WebPKI-roots configuration: resolved
+  rustls features remain `std` only (no `ring`, `aws-lc-rs`, or `tls12` provider/
+  protocol feature enabled). Plain `ws://` and the trusted-LAN/external TLS
+  termination policy are unchanged; no live TLS endpoint or end-to-end TLS
+  security test is claimed.
+- Correct the client integration guide's introduction and hello examples to
+  control protocol v7. There is no wire change: the control protocol remains
+  v7 and the binary media header remains v1.
+- Keep radio leases, explicit PTT and disconnect cleanup, authentication,
+  and the trusted-LAN/TLS security boundary unchanged.
+- HostBridge hardware, audio, and physical PTT/RF behavior have not been
+  validated for this update; upstream Rigwright hardware evidence does not
+  constitute end-to-end HostBridge validation.
+
 ## 0.1.5 - Rigwright 0.1.29
 
 - Consume the published Rigwright 0.1.29 crate to correct FT-991A filter-width
