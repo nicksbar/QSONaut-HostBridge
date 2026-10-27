@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.6] - 2026-10-27
+
+- Consume the published Rigwright 0.1.30 crate, inheriting the corrected
+  IC-756PROII capability surface: RIT-offset and tuner-status reads are not
+  advertised, and Split is write-only through the existing directional
+  control capability projection.
+- Correct the client integration guide's introduction and hello examples to
+  control protocol v7. There is no wire change: the control protocol remains
+  v7 and the binary media header remains v1.
+- Keep radio leases, explicit PTT and disconnect cleanup, authentication,
+  and the trusted-LAN/TLS security boundary unchanged.
+- HostBridge hardware, audio, and physical PTT/RF behavior have not been
+  validated for this update; upstream Rigwright hardware evidence does not
+  constitute end-to-end HostBridge validation.
+
 ## 0.1.5 - Rigwright 0.1.29
 
 - Consume the published Rigwright 0.1.29 crate to correct FT-991A filter-width

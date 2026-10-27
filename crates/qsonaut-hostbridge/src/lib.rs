@@ -1340,6 +1340,40 @@ mod tests {
     }
 
     #[test]
+    fn ic756proii_capability_projection_preserves_write_only_split() {
+        // Construction is lazy: capability projection must not open a port.
+        let radio = IcomCiVRadio::new_for_model_default_address(
+            rigwright::IcomCivModel::Ic756ProIi,
+            "unused-capability-test-port",
+            19_200,
+            0xE0,
+        );
+        let capabilities =
+            radio_capabilities(&radio, RadioDriver::IcomCiv, Some("IC-756PROII".into()));
+        let message = ServerMessage::RadioCapabilities(capabilities.clone());
+        let json = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ServerMessage>(&json).unwrap(),
+            message
+        );
+        assert!(!capabilities.tuner);
+        let metadata = capabilities.driver_metadata.as_ref().unwrap();
+        assert_eq!(metadata.model.as_deref(), Some("IC-756PROII"));
+        assert_eq!(metadata.controls, capabilities.controls);
+        for controls in [&capabilities.controls, &metadata.controls] {
+            assert!(!controls.iter().any(|control| control.id == "Rit"));
+            assert!(!controls.iter().any(|control| control.id == "Tuner"));
+            let split = controls
+                .iter()
+                .find(|control| control.id == "Split")
+                .unwrap();
+            assert!(!split.readable);
+            assert!(split.writable);
+        }
+        assert_eq!(radio.transport_metrics().commands_started, 0);
+    }
+
+    #[test]
     fn driver_metadata_exposes_rigwright_host_baud_choices() {
         let capabilities = radio_capabilities(
             &rigwright::NullRadio::new(),
